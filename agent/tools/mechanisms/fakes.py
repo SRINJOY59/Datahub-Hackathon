@@ -99,7 +99,8 @@ class FakeMechanisms(Mechanisms):
             self._healthy = False
         return True
 
-    def propose_fix(self, context: ContextBundle, root_cause: str) -> str:
+    def propose_fix(self, incident: Incident, context: ContextBundle,
+                    root_cause: str) -> str:
         return "https://github.com/your-org/fraud-pipeline/pull/42"
 
     def write_back(self, post_mortem: PostMortem) -> None:

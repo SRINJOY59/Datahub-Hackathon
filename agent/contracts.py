@@ -27,6 +27,9 @@ class SignalType(str, Enum):
     SCHEMA_CHANGE = "schema_change"
     FRESHNESS = "freshness"
     MODEL_DRIFT = "model_drift"
+    DEPENDENCY_CHANGE = "dependency_change"    # external package / API breaking change
+    CODE_CHANGE = "code_change"                # a commit altered a transform/model
+    TRAINING_REGRESSION = "training_regression"  # model eval metric regressed
 
 
 class ActionType(str, Enum):
@@ -41,6 +44,19 @@ class AutonomyTier(str, Enum):
     AUTO = "auto"            # small blast radius, non-critical -> full auto
     PR_ONLY = "pr_only"      # Tier-Critical -> code fix via human-approved PR
     HUMAN_ONLY = "human_only"  # PII / high blast radius -> page a human
+
+
+class ChangeType(str, Enum):
+    """The deterministically-classified anomaly behind an incident."""
+    NULL_SPIKE = "null_spike"            # null rate jumped in the recent batch
+    SCALE_SHIFT = "scale_shift"          # unit/scale error (e.g. cents vs dollars)
+    RANGE_VIOLATION = "range_violation"  # values outside a plausible range
+    SCHEMA_CHANGE = "schema_change"      # column dropped / renamed / retyped
+    DISTRIBUTION_DRIFT = "distribution_drift"  # subtle shift, no hard violation
+    DEPENDENCY_CHANGE = "dependency_change"    # external package / API break
+    CODE_CHANGE = "code_change"                # a source change altered behavior
+    TRAINING_REGRESSION = "training_regression"  # model eval metric regressed
+    UNKNOWN = "unknown"
 
 
 # --------------------------------------------------------------------------- #
@@ -94,6 +110,61 @@ class ValidationResult:
 
 
 @dataclass
+class ColumnProfile:
+    """A snapshot of one column's health, split recent-vs-historical."""
+    dataset_urn: str
+    table: str
+    column: str
+    null_rate: float = 0.0
+    recent_null_rate: float = 0.0
+    mean: Optional[float] = None
+    recent_mean: Optional[float] = None
+    minimum: Optional[float] = None
+    maximum: Optional[float] = None
+    distinct: Optional[int] = None
+    exists: bool = True
+    note: str = ""
+
+
+@dataclass
+class Evidence:
+    """A grounded fact produced by a probe. The LLM reasons over these; it does
+    not invent them."""
+    probe: str                     # which probe produced it
+    kind: str                      # e.g. change_type value, "column_lineage"
+    summary: str                   # human-readable, goes into the prompt
+    data: dict = field(default_factory=dict)
+    confidence: str = "medium"
+
+
+@dataclass
+class PriorIncident:
+    """A past incident recalled from memory (the graph gets smarter each time)."""
+    incident_id: str
+    asset_urn: str
+    root_cause: str
+    change_type: str = ""
+    resolution: str = ""
+    when: str = ""
+
+
+@dataclass
+class RootCauseAnalysis:
+    """Structured output of the RCA engine — grounded in real evidence."""
+    incident_id: str
+    root_cause_asset: str          # urn of the asset where the change originated
+    root_cause_column: Optional[str]
+    change_type: ChangeType
+    confidence: str                # low | medium | high
+    narrative: str                 # LLM synthesis over the evidence
+    evidence: list[str] = field(default_factory=list)
+    upstream_path: list[str] = field(default_factory=list)  # tables walked
+    blast_radius: list[str] = field(default_factory=list)
+    recommended_mitigation: str = ""
+    precedents: list[str] = field(default_factory=list)  # prior incident ids cited
+
+
+@dataclass
 class PostMortem:
     incident_id: str
     asset_urn: str
@@ -128,10 +199,53 @@ class Mechanisms(Protocol):
         """Replay an action's inverse (rollback)."""
         ...
 
-    def propose_fix(self, context: ContextBundle, root_cause: str) -> str:
-        """Open a draft fix PR against the real schema; return the PR URL."""
+    def propose_fix(self, incident: Incident, context: ContextBundle,
+                    root_cause: str) -> str:
+        """Generate a code fix (e.g. for a dependency/API break or schema fix) and
+        open a draft PR; return the PR URL or a local diff path."""
         ...
 
     def write_back(self, post_mortem: PostMortem) -> None:
         """Write the incident + post-mortem back into DataHub."""
+        ...
+
+
+# --------------------------------------------------------------------------- #
+# Plugin interfaces — the extension surfaces of the investigation platform.
+# New incident classes are added by registering new Detectors / Probes, and new
+# memory backends by implementing MemoryStore. The RCA core does not change.
+# --------------------------------------------------------------------------- #
+class Detector(Protocol):
+    """Emits Signals (Incidents) from a source: DataHub assertions, model drift,
+    dependency changes, git commits, freshness, training metrics, ..."""
+    name: str
+
+    def detect(self) -> list[Incident]:
+        ...
+
+
+class Probe(Protocol):
+    """Investigates a Signal and returns grounded Evidence. Column lineage, data
+    profiling, dependency diff, git blame, schema history, model eval, env, ..."""
+    name: str
+
+    def applies_to(self, incident: Incident) -> bool:
+        ...
+
+    def investigate(self, incident: Incident, context: ContextBundle) -> list[Evidence]:
+        ...
+
+
+class MemoryStore(Protocol):
+    """Pluggable incident memory. Default backend writes to DataHub; others may
+    add vector recall or codebase indexing."""
+
+    def record(self, post_mortem: PostMortem) -> None:
+        ...
+
+    def recall(self, incident: Incident, context: ContextBundle,
+               change_type: Optional[str] = None) -> list[PriorIncident]:
+        """Return prior incidents relevant to this one. When change_type is given,
+        only incidents of the same kind are returned (so unrelated past incidents
+        on the same asset don't mislead RCA)."""
         ...

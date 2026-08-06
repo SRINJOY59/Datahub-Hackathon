@@ -11,11 +11,24 @@ from __future__ import annotations
 
 import argparse
 
+from scenarios.api_breaking_change import ApiBreakingChangeScenario
 from scenarios.base import Scenario
+from scenarios.distribution_drift import DistributionDriftScenario
 from scenarios.null_spike import NullSpikeScenario
+from scenarios.schema_change import SchemaChangeScenario
+from scenarios.training_regression import TrainingRegressionScenario
 from scenarios.unit_bug import UnitBugScenario
 
-SCENARIOS = {s.name: s for s in (UnitBugScenario, NullSpikeScenario)}
+SCENARIOS = {
+    s.name: s for s in (
+        UnitBugScenario,
+        NullSpikeScenario,
+        DistributionDriftScenario,
+        SchemaChangeScenario,
+        ApiBreakingChangeScenario,
+        TrainingRegressionScenario,
+    )
+}
 
 
 def main() -> None:

@@ -21,13 +21,15 @@ from agent.contracts import (
     ActionRecord,
     ActionType,
     AutonomyTier,
+    ChangeType,
     ContextBundle,
     Incident,
     Mechanisms,
+    MemoryStore,
     PostMortem,
 )
 from agent.llm import LLMClient
-from agent.prompts.rca import RCA_PROMPT
+from agent.rca import RCAEngine
 
 
 def log(stage: str, msg: str) -> None:
@@ -35,37 +37,17 @@ def log(stage: str, msg: str) -> None:
 
 
 class SentinelAgent:
-    def __init__(self, mechanisms: Mechanisms, llm: Optional[LLMClient] = None) -> None:
+    def __init__(
+        self,
+        mechanisms: Mechanisms,
+        llm: Optional[LLMClient] = None,
+        memory: Optional[MemoryStore] = None,
+    ) -> None:
         self.m = mechanisms
-        self.llm = llm
+        self.memory = memory
+        self.rca = RCAEngine(llm=llm, memory=memory)
 
     # --- POLICY-PLANE STUBS (partner fleshes these out) -------------------- #
-    def _root_cause(self, ctx: ContextBundle, inc: Incident) -> str:
-        # Use the LLM over real lineage context when available; otherwise a
-        # deterministic fallback (blame the furthest-upstream ancestor).
-        if self.llm and self.llm.available():
-            prompt = RCA_PROMPT.format(
-                incident=inc.summary,
-                context=self._context_for_prompt(ctx),
-            )
-            try:
-                return self.llm.complete(prompt).replace("\n", " ").strip()
-            except Exception as e:  # never let a flaky LLM call break the loop
-                log("rca", f"(LLM call failed: {e}; using fallback)")
-        origin = ctx.upstream[-1].name if ctx.upstream else ctx.name
-        return f"upstream change in {origin} corrupted {ctx.name}"
-
-    @staticmethod
-    def _context_for_prompt(ctx: ContextBundle) -> str:
-        return (
-            f"asset: {ctx.name} ({ctx.entity_type})\n"
-            f"schema: {', '.join(ctx.schema_fields)}\n"
-            f"tags: {ctx.tags}\n"
-            f"upstream: {[n.name for n in ctx.upstream]}\n"
-            f"downstream: {[n.name for n in ctx.downstream]}\n"
-            f"failed_assertions: {ctx.failed_assertions}"
-        )
-
     def _autonomy_tier(self, ctx: ContextBundle) -> AutonomyTier:
         if "PII" in ctx.tags:
             return AutonomyTier.HUMAN_ONLY
@@ -90,21 +72,42 @@ class SentinelAgent:
         return actions
 
     # --- THE LOOP ---------------------------------------------------------- #
-    def handle(self, inc: Incident) -> None:
+    def handle(self, inc: Incident, seen_roots: Optional[dict] = None) -> None:
+        seen_roots = seen_roots if seen_roots is not None else {}
         print(f"\n=== Incident {inc.id}: {inc.summary} ===")
 
         ctx = self.m.read_context(inc.asset_urn)
         log("context", f"{ctx.name}: {len(ctx.upstream)} upstream, "
                        f"{len(ctx.downstream)} downstream, tags={ctx.tags}")
 
-        root_cause = self._root_cause(ctx, inc)
-        log("rca", root_cause)
+        rca = self.rca.analyze(inc, ctx)
+        log("rca", f"[{rca.change_type.value}] {rca.narrative}")
+        log("rca", f"root cause: {rca.root_cause_asset.split(',')[-2] if ',' in rca.root_cause_asset else rca.root_cause_asset}"
+                   f".{rca.root_cause_column}  (confidence {rca.confidence})")
+        if rca.precedents:
+            log("memory", f"cited {len(rca.precedents)} prior incident(s): {rca.precedents}")
+        log("blast", f"{len(rca.blast_radius)} affected: {rca.blast_radius}")
 
-        blast = [n.name for n in ctx.downstream]
-        log("blast", f"{len(blast)} affected: {blast}")
+        # Correlated incidents: one upstream change can trip many downstream
+        # assertions. Mitigate the shared root cause once; note the rest.
+        root_key = (rca.root_cause_asset, rca.root_cause_column)
+        if root_key in seen_roots:
+            log("correlate", f"same root cause as {seen_roots[root_key]} — "
+                             f"skipping duplicate mitigation")
+            return
+        seen_roots[root_key] = inc.id
 
         tier = self._autonomy_tier(ctx)
         log("policy", f"autonomy tier = {tier.value}")
+
+        # Code / dependency incidents: remediation is a fix PR (apply the change),
+        # not a data rollback.
+        if rca.change_type in (ChangeType.DEPENDENCY_CHANGE, ChangeType.CODE_CHANGE):
+            pr = self.m.propose_fix(inc, ctx, rca.narrative)
+            log("fix", f"generated migration -> {pr}")
+            self._resolve(inc, ctx, rca, actions_taken=["propose_fix"],
+                          resolution=f"auto-migration: {pr}")
+            return
 
         actions = self._plan(ctx)
         journal: list[ActionRecord] = []
@@ -121,34 +124,46 @@ class SentinelAgent:
         if result.passed:
             pr = None
             if tier in (AutonomyTier.PR_ONLY, AutonomyTier.HUMAN_ONLY):
-                pr = self.m.propose_fix(ctx, root_cause)
+                pr = self.m.propose_fix(inc, ctx, rca.narrative)
                 log("fix", f"draft PR opened: {pr}")
-            pm = PostMortem(
-                incident_id=inc.id,
-                asset_urn=inc.asset_urn,
-                root_cause=root_cause,
-                blast_radius=[n.urn for n in ctx.downstream],
+            self._resolve(
+                inc, ctx, rca,
                 actions_taken=[a.action_type.value for a in journal],
-                resolution="mitigated via rollback; " + (f"fix PR {pr}" if pr else "auto-fixed"),
-                resolved_at=datetime.now(timezone.utc),
+                resolution=(f"mitigated ({rca.recommended_mitigation}); "
+                            + (f"fix PR {pr}" if pr else "auto-fixed")),
             )
-            self.m.write_back(pm)
-            log("resolve", "incident resolved; post-mortem written to graph")
         else:
             for a in reversed(journal):
                 self.m.undo(a)
             log("rollback", f"validation failed — reverted {len(journal)} actions")
             log("escalate", f"paged owners {ctx.owners} with full RCA")
 
+    def _resolve(self, inc, ctx, rca, actions_taken: list[str], resolution: str) -> None:
+        pm = PostMortem(
+            incident_id=inc.id,
+            asset_urn=inc.asset_urn,
+            root_cause=f"[{rca.change_type.value}] {rca.narrative}",
+            blast_radius=[n.urn for n in ctx.downstream],
+            actions_taken=actions_taken,
+            resolution=resolution,
+            resolved_at=datetime.now(timezone.utc),
+        )
+        self.m.write_back(pm)
+        if self.memory:
+            self.memory.record(pm)
+            log("memory", "post-mortem recorded to DataHub for future recall")
+        log("resolve", "incident resolved; post-mortem written to graph")
+
     def run(self) -> None:
         incidents = self.m.detect_incidents()
         log("detect", f"{len(incidents)} open incident(s)")
+        seen_roots: dict = {}  # shared across incidents to correlate root causes
         for inc in incidents:
-            self.handle(inc)
+            self.handle(inc, seen_roots)
         print("\n=== loop complete ===")
 
 
 if __name__ == "__main__":
-    from agent.tools.fakes import FakeMechanisms
+    from agent.tools.mechanisms.fakes import FakeMechanisms
 
     SentinelAgent(FakeMechanisms()).run()

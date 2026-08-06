@@ -34,15 +34,18 @@ def main() -> None:
         print("LLM: not configured (set OPENROUTER_API_KEY) — using RCA fallback")
 
     if args.fake:
-        from agent.tools.fakes import FakeMechanisms
+        from agent.tools.mechanisms.fakes import FakeMechanisms
 
         mechanisms = FakeMechanisms()
+        memory = None
     else:
-        from agent.tools.mechanisms import RealMechanisms
+        from agent.tools.mechanisms.composite import RealMechanisms
+        from memory.base import get_memory
 
-        mechanisms = RealMechanisms()
+        mechanisms = RealMechanisms(llm=llm)  # llm powers the CodeFixTool
+        memory = get_memory()  # DataHub-backed incident memory
 
-    SentinelAgent(mechanisms, llm=llm).run()
+    SentinelAgent(mechanisms, llm=llm, memory=memory).run()
 
 
 if __name__ == "__main__":

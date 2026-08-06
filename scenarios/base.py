@@ -7,6 +7,7 @@ clean, healthy state between demo takes.
 """
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -18,8 +19,25 @@ import duckdb
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DBT_DIR = REPO_ROOT / "pipeline" / "dbt"
 DUCKDB_PATH = DBT_DIR / "fraud.duckdb"
+ADVISORIES_DIR = REPO_ROOT / ".sentinel" / "advisories"
 
 _DBT_EXE = Path(sys.executable).parent / ("dbt.exe" if os.name == "nt" else "dbt")
+
+
+def write_advisory(name: str, advisory: dict) -> Path:
+    ADVISORIES_DIR.mkdir(parents=True, exist_ok=True)
+    path = ADVISORIES_DIR / f"{name}.json"
+    path.write_text(json.dumps(advisory, indent=2), encoding="utf-8")
+    return path
+
+
+def clear_advisories() -> int:
+    if not ADVISORIES_DIR.exists():
+        return 0
+    files = list(ADVISORIES_DIR.glob("*.json"))
+    for f in files:
+        f.unlink()
+    return len(files)
 
 
 def run_dbt(args: list[str]) -> bool:
@@ -81,6 +99,9 @@ class Scenario(ABC):
 
     @staticmethod
     def reset(reingest_after: bool = True) -> None:
+        n = clear_advisories()
+        if n:
+            print(f"[reset] cleared {n} advisory file(s)")
         print("[reset] re-seeding clean raw data...")
         run_dbt(["seed", "--full-refresh"])
         print("\n[reset] rebuilding models...")
@@ -92,3 +113,21 @@ class Scenario(ABC):
             print("\n[reset] refreshing DataHub...")
             reingest()
         print("\n[reset] pipeline restored to healthy state.")
+
+
+class AdvisoryScenario:
+    """A non-data scenario: publishes a vendor advisory (an external API/package
+    breaking change). No dbt rebuild — the dependency detector reads the advisory
+    and scans the codebase."""
+
+    name: str = ""
+    description: str = ""
+    advisory: dict = {}
+
+    def apply(self, reingest_after: bool = True) -> None:  # reingest arg for uniform CLI
+        path = write_advisory(self.name, self.advisory)
+        pkg = self.advisory.get("package")
+        print(f"[{self.name}] published advisory for {pkg}: "
+              f"{self.advisory.get('from_version')} -> {self.advisory.get('to_version')}")
+        print(f"[{self.name}] wrote {path.relative_to(REPO_ROOT).as_posix()}")
+        print(f"\n[{self.name}] done. Run `python -m agent` to detect + auto-fix.")

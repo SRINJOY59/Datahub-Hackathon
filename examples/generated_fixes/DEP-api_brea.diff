@@ -1,0 +1,11 @@
+--- a/ml/train.py
++++ b/ml/train.py
+@@ -66,7 +66,7 @@
+         )
+         mlflow.log_input(dataset, context="training")
+ 
+-        params = {"n_estimators": 200, "max_depth": 3, "learning_rate": 0.1}
++        params = {"num_estimators": 200, "max_depth": 3, "learning_rate": 0.1}
+         clf = GradientBoostingClassifier(random_state=42, **params)
+         clf.fit(X_train, y_train)
+ 

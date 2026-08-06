@@ -33,3 +33,7 @@ Thumbs.db
 # Agent runtime artifacts
 agent_journal/
 *.log
+
+# Runtime advisories (published by scenarios)
+.sentinel/
+.claude/
