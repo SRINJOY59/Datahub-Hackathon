@@ -22,7 +22,7 @@ import pandas as pd
 
 import duckdb
 
-from config import (
+from ml.config import (
     CHAMPION_ALIAS,
     DUCKDB_PATH,
     FEATURES,
@@ -33,7 +33,8 @@ from config import (
 
 BASELINE_PATH = REPO_ROOT / "ml" / "baseline.json"
 SNAPSHOT_PATH = REPO_ROOT / "ml" / "last_scoring_snapshot.json"
-DRIFT_THRESHOLD = 0.05  # +5pp positive-rate shift = flagged
+PRED_DRIFT_THRESHOLD = 0.02      # +/-2pp positive-rate shift
+FEATURE_DRIFT_THRESHOLD = 0.25   # +/-25% relative shift in any feature mean
 
 
 def load_features() -> pd.DataFrame:
@@ -75,21 +76,35 @@ def main() -> None:
 
     dr = snap["positive_pred_rate"] - base["positive_pred_rate"]
     dscore = snap["mean_score"] - base["mean_score"]
-    davg = (
-        snap["feature_means"]["avg_txn_amount"]
-        - base["feature_means"]["avg_txn_amount"]
-    )
+
+    # per-feature relative drift vs baseline
+    feature_drift = {}
+    for c in FEATURES:
+        b = base["feature_means"][c]
+        cur = snap["feature_means"][c]
+        feature_drift[c] = (cur - b) / b if b else 0.0
+    worst_feat = max(feature_drift, key=lambda c: abs(feature_drift[c]))
 
     print(f"\nScored {snap['n_scored']} txns with {snap['model']}")
     print(f"  positive_pred_rate: {snap['positive_pred_rate']:.4f} "
           f"(baseline {base['positive_pred_rate']:.4f}, Δ {dr:+.4f})")
     print(f"  mean_score:         {snap['mean_score']:.4f} (Δ {dscore:+.4f})")
-    print(f"  avg_txn_amount:     {snap['feature_means']['avg_txn_amount']:.2f} "
-          f"(baseline {base['feature_means']['avg_txn_amount']:.2f}, Δ {davg:+.2f})")
+    print(f"  top feature drift:  {worst_feat} "
+          f"{feature_drift[worst_feat]*100:+.1f}%  "
+          f"({base['feature_means'][worst_feat]:.2f} -> "
+          f"{snap['feature_means'][worst_feat]:.2f})")
 
-    drifted = abs(dr) >= DRIFT_THRESHOLD
+    pred_drift = abs(dr) >= PRED_DRIFT_THRESHOLD
+    feat_drift = abs(feature_drift[worst_feat]) >= FEATURE_DRIFT_THRESHOLD
+    drifted = pred_drift or feat_drift
+
+    reasons = []
+    if pred_drift:
+        reasons.append("prediction-rate shift")
+    if feat_drift:
+        reasons.append(f"{worst_feat} distribution shift")
     print(f"\n  DRIFT DETECTED: {drifted}"
-          + ("  <-- incident signal" if drifted else ""))
+          + (f"  <-- incident signal ({', '.join(reasons)})" if drifted else ""))
 
 
 if __name__ == "__main__":

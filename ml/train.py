@@ -27,7 +27,7 @@ from sklearn.model_selection import train_test_split
 
 import duckdb
 
-from config import (
+from ml.config import (
     CHAMPION_ALIAS,
     DUCKDB_PATH,
     EXPERIMENT_NAME,

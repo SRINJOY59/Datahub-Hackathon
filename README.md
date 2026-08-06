@@ -63,18 +63,19 @@ All 21 dbt tests should pass on the clean data.
 ## 4. Train the model
 
 ```bash
-python ml/train.py   # trains + registers fraud_detection_model @champion in MLflow
-python ml/score.py   # scores current features, saves the drift baseline
+python -m ml.train   # trains + registers fraud_detection_model @champion in MLflow
+python -m ml.score   # scores current features, saves the drift baseline
 ```
 
 ## 5. Ingest into DataHub
 
 ```bash
-python run_ingestion.py
+python -m ingestion
 ```
 
-This runs both ingestion recipes (dbt + MLflow) and wires the ML lineage. It
-resolves all paths from the repo root, so it works from any directory.
+This runs both ingestion recipes (dbt + MLflow), wires the ML lineage, and
+applies governance (tags + owners). It resolves all paths from the repo root,
+so it works from any directory.
 
 ## 6. Verify
 
@@ -87,15 +88,29 @@ Open http://localhost:9002 and search `fraud`. You should see:
   deployment — open its **Lineage** tab to see the full
   `raw_transactions → features → training_dataset → model → deployment` chain
 
-## Resetting
+## Incident scenarios
+
+Inject a silent incident (poisons a feature, trips an assertion, drifts the
+model, and surfaces in DataHub), or restore a clean state:
 
 ```bash
-# rebuild the pipeline data
-cd pipeline/dbt && dbt build --profiles-dir . && cd ../..
+python -m scenarios list        # available scenarios
+python -m scenarios unit_bug    # inject the cents/dollars unit bug
+python -m scenarios null_spike  # inject a null-spike
+python -m scenarios reset        # restore a clean, healthy pipeline
+```
 
-# tear down / restart DataHub
+## Run the agent
+
+```bash
+python -m agent   # runs the remediation loop (fake tools until real ones land)
+```
+
+## Resetting DataHub
+
+```bash
 datahub docker nuke        # removes all DataHub containers + volumes
-datahub docker quickstart  # fresh start
+datahub docker quickstart  # fresh start (then re-run steps 3-5)
 ```
 
 ## License
