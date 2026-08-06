@@ -1,8 +1,12 @@
 # Sentinel
 
-Autonomous ML-incident remediation agent built on DataHub. This README covers
-setup for the current state: the fraud ML pipeline, the model, and ingestion of
-the end-to-end lineage into DataHub.
+Autonomous ML-incident remediation agent built on DataHub. Sentinel detects data
+incidents from DataHub assertions, reads the real lineage/schema/ownership/tags
+to root-cause them (LLM over the context graph), computes blast radius across the
+`raw → feature → model → deployment` chain, and runs a remediation loop.
+
+This README covers setup for the current state: the fraud ML pipeline, the model,
+end-to-end lineage ingestion, incident scenarios, and the agent.
 
 ## Prerequisites
 
@@ -100,11 +104,36 @@ python -m scenarios null_spike  # inject a null-spike
 python -m scenarios reset        # restore a clean, healthy pipeline
 ```
 
-## Run the agent
+## Configure the agent LLM (optional)
+
+The agent uses an LLM for root-cause analysis via [OpenRouter](https://openrouter.ai)
+(OpenAI-compatible). Without a key it still runs, using a deterministic RCA
+fallback.
 
 ```bash
-python -m agent   # runs the remediation loop (fake tools until real ones land)
+cp .env.example .env
+# then set in .env:
+#   OPENROUTER_API_KEY=sk-or-...
+#   OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free   # any OpenRouter model
 ```
+
+`.env` is gitignored — never commit your key.
+
+## Run the agent
+
+End-to-end demo flow (break → detect → root-cause → restore):
+
+```bash
+python -m scenarios unit_bug   # inject a silent incident, refresh DataHub
+python -m agent                # detect from DataHub, read real context, LLM RCA, remediate
+python -m scenarios reset       # restore a clean, healthy pipeline
+```
+
+`python -m agent` reads open incidents and lineage live from DataHub. Detection
+and context are backed by DataHub; the mitigation tools (rollback, circuit
+breaker, fix-PR, post-mortem write-back) are being built and currently run as
+stubs. Use `python -m agent --fake` for a fully offline smoke test (no DataHub or
+LLM key needed).
 
 ## Resetting DataHub
 
