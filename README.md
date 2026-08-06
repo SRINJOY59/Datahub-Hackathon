@@ -1,58 +1,102 @@
-# Sentinel — the autonomous on-call ML engineer
+# Sentinel
 
-> Detection is commoditized. Sentinel does **remediation**: it root-causes ML pipeline
-> incidents across DataHub's end-to-end lineage, applies a **reversible** fix, verifies it,
-> rolls itself back if the fix fails, and writes the post-mortem back into the graph so the
-> next incident resolves faster.
+Autonomous ML-incident remediation agent built on DataHub. This README covers
+setup for the current state: the fraud ML pipeline, the model, and ingestion of
+the end-to-end lineage into DataHub.
 
-Built for the **DataHub Agent Hackathon** — Track 3: Production ML Agents.
+## Prerequisites
 
-## The problem
+- Python 3.11
+- Docker Desktop (running)
+- Git
+- ~8 GB free RAM for the DataHub quickstart containers
 
-A broken dashboard *looks* broken. A drifting model happily serves wrong predictions for
-weeks. Observability tools (Monte Carlo, Arize, Fiddler) tell you something broke — none of
-them fix it. Sentinel closes the loop:
-
-```
-detect → root-cause (walk ML lineage) → blast radius → apply reversible fix
-→ validate → keep & write post-mortem  |  auto-rollback & escalate → learn
-```
-
-## Why DataHub is load-bearing
-
-Remove DataHub and the agent is blind and amnesiac:
-
-- **The unified graph** — the only place `source table → feature → model → deployment`
-  lineage exists in one map. Sentinel's whole root-cause walk runs on it.
-- **Shared memory** — post-mortems are written back onto the **model card**, so the next
-  agent or engineer inherits the knowledge. This is the moat: the graph gets smarter with
-  every incident.
-- **Control plane** — DataHub tags (`Tier-Critical`, `PII`) drive the agent's autonomy tier.
-
-## Architecture
-
-Mechanism / policy split (see `contracts.py` — the interface between the two planes):
-
-- **Mechanism plane** — DataHub adapter, snapshot/model-version engine, dbt runner, GitHub.
-  *Things the system can do.*
-- **Policy plane** — orchestrator loop, RCA, rollback controller, validation gate, memory.
-  *What the system decides to do, and how to undo it.*
-
-## Quickstart
+## 1. Clone and install
 
 ```bash
+git clone <your-repo-url> sentinel
+cd sentinel
+
 python -m venv .venv
-.venv\Scripts\activate            # Windows
+# Windows:
+.venv\Scripts\activate
+# macOS/Linux:
+source .venv/bin/activate
+
 pip install -r requirements.txt
-datahub docker quickstart          # brings up DataHub at http://localhost:9002
-cp .env.example .env               # then fill in keys
 ```
 
-Full setup and demo walkthrough: _coming as the build lands._
+## 2. Start DataHub
 
-## Status
+```bash
+datahub docker quickstart
+```
 
-Early build. Phase 0 (scaffold) complete. See `examples/` for sample outputs.
+On Windows, if the CLI errors on a unicode character at the very end, the stack
+still started — set `PYTHONIOENCODING=utf-8` to silence it:
+
+```bash
+set PYTHONIOENCODING=utf-8   # Windows
+export PYTHONIOENCODING=utf-8 # macOS/Linux
+```
+
+Wait until the containers are healthy, then confirm the UI is up at
+http://localhost:9002 (login `datahub` / `datahub`). It will be empty until
+ingestion (step 5).
+
+## 3. Build the data pipeline
+
+```bash
+# generate the synthetic transaction seed
+python pipeline/generate_raw_data.py
+
+cd pipeline/dbt
+dbt seed          --profiles-dir .
+dbt run           --profiles-dir .
+dbt docs generate --profiles-dir .   # produces manifest + catalog
+dbt build         --profiles-dir .   # run + test -> run_results (assertions)
+cd ../..
+```
+
+All 21 dbt tests should pass on the clean data.
+
+## 4. Train the model
+
+```bash
+python ml/train.py   # trains + registers fraud_detection_model @champion in MLflow
+python ml/score.py   # scores current features, saves the drift baseline
+```
+
+## 5. Ingest into DataHub
+
+```bash
+python run_ingestion.py
+```
+
+This runs both ingestion recipes (dbt + MLflow) and wires the ML lineage. It
+resolves all paths from the repo root, so it works from any directory.
+
+## 6. Verify
+
+Open http://localhost:9002 and search `fraud`. You should see:
+
+- 10 datasets (5 dbt models + 5 sibling DuckDB tables) with table- and
+  column-level lineage
+- 21 assertions (the dbt tests) on the datasets
+- `fraud_detection_model` with a training job, training metrics, and a scoring
+  deployment — open its **Lineage** tab to see the full
+  `raw_transactions → features → training_dataset → model → deployment` chain
+
+## Resetting
+
+```bash
+# rebuild the pipeline data
+cd pipeline/dbt && dbt build --profiles-dir . && cd ../..
+
+# tear down / restart DataHub
+datahub docker nuke        # removes all DataHub containers + volumes
+datahub docker quickstart  # fresh start
+```
 
 ## License
 
