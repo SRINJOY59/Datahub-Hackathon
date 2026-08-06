@@ -1,0 +1,16 @@
+{
+  "scored_at": "2026-08-06T08:11:33.998015+00:00",
+  "model": "fraud_detection_model@champion",
+  "n_scored": 8000,
+  "positive_pred_rate": 0.007875,
+  "mean_score": 0.030165517099842377,
+  "feature_means": {
+    "amount": 60.414263749999996,
+    "avg_txn_amount": 60.414263749999996,
+    "user_txn_count": 27.768,
+    "stddev_txn_amount": 67.30649640182455,
+    "merchant_fraud_rate": 0.030625,
+    "merchant_txn_count": 134.2515,
+    "is_risky_category": 0.30075
+  }
+}

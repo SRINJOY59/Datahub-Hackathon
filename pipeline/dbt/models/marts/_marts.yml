@@ -1,0 +1,22 @@
+version: 2
+
+models:
+  - name: training_dataset
+    description: "Model-ready fraud training table (features + label), one row per transaction."
+    columns:
+      - name: transaction_id
+        data_tests:
+          - not_null
+          - unique
+      - name: avg_txn_amount
+        description: "User avg transaction amount feature (joined from feat_user_txn_stats)."
+        data_tests:
+          - not_null
+      - name: merchant_fraud_rate
+        data_tests:
+          - not_null
+      - name: is_fraud
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]

@@ -1,0 +1,8 @@
+fraud_pipeline:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      # DuckDB file lives alongside the dbt project; consumed by ml/ and scenarios/.
+      path: "fraud.duckdb"
+      threads: 4

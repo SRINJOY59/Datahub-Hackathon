@@ -1,0 +1,24 @@
+# --- DataHub (CLI + Python SDK + ingestion sources) ---
+# Pinned to match the v1.7.0 quickstart docker images (avoids pip backtracking on extras).
+acryl-datahub[dbt,mlflow]==1.7.0
+
+# --- Data pipeline (the "world" that can break) ---
+dbt-duckdb>=1.7.0
+duckdb>=0.10.0
+pandas>=2.0.0
+
+# --- ML: model registry, training, drift signal ---
+mlflow>=2.11.0
+scikit-learn>=1.4.0
+numpy>=1.26.0
+
+# --- Agent loop / LLM reasoning ---
+anthropic>=0.40.0
+
+# --- Fix-PR generation (feature #3 Parallel Universe / propose_fix) ---
+PyGithub>=2.3.0
+
+# --- Config / utils ---
+python-dotenv>=1.0.0
+pydantic>=2.6.0
+rich>=13.7.0

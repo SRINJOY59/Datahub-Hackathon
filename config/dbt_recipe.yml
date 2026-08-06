@@ -1,0 +1,35 @@
+# DataHub ingestion recipe for the fraud dbt pipeline.
+# Emits: datasets (dbt models + sibling duckdb tables), column-level lineage,
+# and dbt test results as DataHub assertions.
+#
+# Paths are resolved from ${DATAHUB_ROOT} (the repo root) so the recipe is
+# portable. Run it via the runner, which sets that variable automatically:
+#     python run_ingestion.py
+# Or set it yourself:  DATAHUB_ROOT=/path/to/repo datahub ingest -c config/dbt_recipe.yml
+source:
+  type: dbt
+  config:
+    manifest_path: "${DATAHUB_ROOT}/pipeline/dbt/target/manifest.json"
+    catalog_path: "${DATAHUB_ROOT}/pipeline/dbt/target/catalog.json"
+    run_results_paths:
+      - "${DATAHUB_ROOT}/pipeline/dbt/target/run_results.json"
+
+    # The real warehouse the dbt models physically live in.
+    target_platform: "duckdb"
+    platform_instance: "fraud_demo"
+
+    # Emit dbt tests as DataHub assertions (this is the agent's trip-wire signal).
+    entities_enabled:
+      test_results: "YES"
+      test_definitions: "YES"
+      models: "YES"
+      sources: "YES"
+      seeds: "YES"
+
+    # Tag everything so it's easy to find in the UI.
+    meta_mapping: {}
+
+sink:
+  type: datahub-rest
+  config:
+    server: "http://localhost:8080"

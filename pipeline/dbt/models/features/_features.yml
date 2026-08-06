@@ -1,0 +1,32 @@
+version: 2
+
+models:
+  - name: feat_user_txn_stats
+    description: "Per-user spending features (avg/stddev/max amount, txn count)."
+    columns:
+      - name: user_id
+        description: "Customer identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: avg_txn_amount
+        description: "Average transaction amount for the user. Core model feature."
+        data_tests:
+          - not_null
+      - name: user_txn_count
+        description: "Number of transactions for the user."
+        data_tests:
+          - not_null
+
+  - name: feat_merchant_risk
+    description: "Per-merchant risk features derived from historical fraud rate."
+    columns:
+      - name: merchant_id
+        description: "Merchant identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: merchant_fraud_rate
+        description: "Historical fraud rate for the merchant (0..1)."
+        data_tests:
+          - not_null

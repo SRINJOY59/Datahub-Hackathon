@@ -1,0 +1,16 @@
+# DataHub ingestion recipe for the MLflow model registry.
+# Emits: MLModelGroup (registered model) + MLModel (versions) with params/metrics.
+#
+# ${DATAHUB_MLRUNS_URI} is the file:// URI of ./mlruns, set by the runner so the
+# recipe is portable across machines and operating systems:
+#     python run_ingestion.py
+source:
+  type: mlflow
+  config:
+    tracking_uri: "${DATAHUB_MLRUNS_URI}"
+    registry_uri: "${DATAHUB_MLRUNS_URI}"
+
+sink:
+  type: datahub-rest
+  config:
+    server: "http://localhost:8080"

@@ -1,0 +1,29 @@
+version: 2
+
+models:
+  - name: stg_transactions
+    description: "Cleaned, typed transaction stream — one row per transaction."
+    columns:
+      - name: transaction_id
+        description: "Unique transaction identifier."
+        data_tests:
+          - not_null
+          - unique
+      - name: user_id
+        description: "Customer who made the transaction."
+        data_tests:
+          - not_null
+      - name: merchant_id
+        description: "Merchant receiving the transaction."
+        data_tests:
+          - not_null
+      - name: amount
+        description: "Transaction amount in USD."
+        data_tests:
+          - not_null
+      - name: is_fraud
+        description: "Label: 1 if the transaction was fraudulent, else 0."
+        data_tests:
+          - not_null
+          - accepted_values:
+              values: [0, 1]
