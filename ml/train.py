@@ -82,6 +82,13 @@ def main() -> None:
             "positive_pred_rate": float(preds.mean()),
         }
 
+        # The distribution this model was trained on. Serving features drift away
+        # from it over time, and without a record of where they started there is
+        # nothing to measure that drift against — training/serving skew is
+        # invisible unless the training side says what "normal" looked like.
+        metrics.update({f"train_mean_{c}": float(X_train[c].mean())
+                        for c in FEATURES})
+
         mlflow.log_params(params)
         mlflow.log_metrics(metrics)
         mlflow.set_tag("domain", "fraud_detection")

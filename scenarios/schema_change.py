@@ -5,12 +5,20 @@ from __future__ import annotations
 
 import duckdb
 
-from scenarios.base import Scenario
+from scenarios.base import DataScenario, Expectation
 
 
-class SchemaChangeScenario(Scenario):
+class SchemaChangeScenario(DataScenario):
     name = "schema_change"
     description = "Upstream renames the amount column (schema drift)"
+
+    expectation = Expectation(
+        signal_type="assertion_failure",
+        change_type="schema_change",
+        root_table="raw_transactions",
+        root_column="amount",
+        actions=["pin_feature", "tag_asset"],
+    )
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         # rename amount -> amount_cents: the downstream models still read `amount`,

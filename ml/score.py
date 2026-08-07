@@ -30,11 +30,24 @@ from ml.config import (
     MODEL_NAME,
     REPO_ROOT,
 )
+from ml.drift import compute_drift
 
 BASELINE_PATH = REPO_ROOT / "ml" / "baseline.json"
 SNAPSHOT_PATH = REPO_ROOT / "ml" / "last_scoring_snapshot.json"
-PRED_DRIFT_THRESHOLD = 0.02      # +/-2pp positive-rate shift
-FEATURE_DRIFT_THRESHOLD = 0.25   # +/-25% relative shift in any feature mean
+
+SCORING_JOB = "fraud_scoring_api"
+
+
+def check_breaker() -> dict | None:
+    """The agent can pause this job when it believes the features feeding it are
+    bad. Honouring that here is what makes PAUSE_JOB a real mitigation rather
+    than a note in a log: scoring on known-bad data is exactly the harm the
+    circuit breaker exists to prevent."""
+    try:
+        from agent.tools.actuators.pause_job import is_paused
+    except ImportError:
+        return None
+    return is_paused(SCORING_JOB)
 
 
 def load_features() -> pd.DataFrame:
@@ -64,6 +77,23 @@ def score() -> dict:
 
 
 def main() -> None:
+    try:
+        from agent.console import enable_utf8
+
+        enable_utf8()
+    except ImportError:
+        pass
+
+    breaker = check_breaker()
+    if breaker:
+        print(f"SCORING PAUSED — circuit breaker open on {SCORING_JOB}")
+        print(f"  incident : {breaker.get('incident_id') or 'unknown'}")
+        print(f"  reason   : {breaker.get('reason')}")
+        print(f"  opened   : {breaker.get('opened_at')}")
+        print("\nThe agent closes this automatically when the incident resolves.")
+        print("To clear it by hand: python -m scenarios reset")
+        raise SystemExit(2)
+
     snap = score()
     SNAPSHOT_PATH.write_text(json.dumps(snap, indent=2))
 
@@ -74,37 +104,24 @@ def main() -> None:
     else:
         base = json.loads(BASELINE_PATH.read_text())
 
-    dr = snap["positive_pred_rate"] - base["positive_pred_rate"]
-    dscore = snap["mean_score"] - base["mean_score"]
-
-    # per-feature relative drift vs baseline
-    feature_drift = {}
-    for c in FEATURES:
-        b = base["feature_means"][c]
-        cur = snap["feature_means"][c]
-        feature_drift[c] = (cur - b) / b if b else 0.0
-    worst_feat = max(feature_drift, key=lambda c: abs(feature_drift[c]))
+    report = compute_drift(snap, base)
+    worst = report.worst_feature
 
     print(f"\nScored {snap['n_scored']} txns with {snap['model']}")
     print(f"  positive_pred_rate: {snap['positive_pred_rate']:.4f} "
-          f"(baseline {base['positive_pred_rate']:.4f}, Δ {dr:+.4f})")
-    print(f"  mean_score:         {snap['mean_score']:.4f} (Δ {dscore:+.4f})")
-    print(f"  top feature drift:  {worst_feat} "
-          f"{feature_drift[worst_feat]*100:+.1f}%  "
-          f"({base['feature_means'][worst_feat]:.2f} -> "
-          f"{snap['feature_means'][worst_feat]:.2f})")
+          f"(baseline {base['positive_pred_rate']:.4f}, "
+          f"Δ {report.pred_rate_delta:+.4f})")
+    print(f"  mean_score:         {snap['mean_score']:.4f} "
+          f"(Δ {report.mean_score_delta:+.4f})")
+    if worst:
+        print(f"  top feature drift:  {worst} "
+              f"{report.worst_feature_delta*100:+.1f}%  "
+              f"({base['feature_means'][worst]:.2f} -> "
+              f"{snap['feature_means'][worst]:.2f})")
 
-    pred_drift = abs(dr) >= PRED_DRIFT_THRESHOLD
-    feat_drift = abs(feature_drift[worst_feat]) >= FEATURE_DRIFT_THRESHOLD
-    drifted = pred_drift or feat_drift
-
-    reasons = []
-    if pred_drift:
-        reasons.append("prediction-rate shift")
-    if feat_drift:
-        reasons.append(f"{worst_feat} distribution shift")
-    print(f"\n  DRIFT DETECTED: {drifted}"
-          + (f"  <-- incident signal ({', '.join(reasons)})" if drifted else ""))
+    print(f"\n  DRIFT DETECTED: {report.drifted}"
+          + (f"  <-- incident signal ({', '.join(report.reasons)})"
+             if report.drifted else ""))
 
 
 if __name__ == "__main__":

@@ -99,3 +99,23 @@ class CodebaseMemory:
                 assets.append(self._producers[rel])
         # dedupe, preserve order
         return list(dict.fromkeys(assets))
+
+    # --- the producer map, read both ways --------------------------------- #
+    def producer_of(self, rel_path: str) -> str | None:
+        """The DataHub asset urn a source file produces, if any."""
+        return self._producers.get(rel_path)
+
+    def source_file_for(self, asset_urn: str) -> str | None:
+        """The source file that produces an asset — the inverse of the producer
+        map. This is what turns 'the root cause is raw_transactions.amount' into
+        'the root cause is this commit to this file', so a git-history probe can
+        name the change that broke it."""
+        for rel, urn in self._producers.items():
+            if urn == asset_urn:
+                return rel
+        return None
+
+    def source_files(self) -> dict[str, str]:
+        """The whole producer map, file -> asset urn (a copy; callers must not
+        mutate the index)."""
+        return dict(self._producers)

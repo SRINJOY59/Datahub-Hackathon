@@ -6,13 +6,23 @@ from __future__ import annotations
 
 import duckdb
 
-from scenarios.base import Scenario
+from scenarios.base import DataScenario, Expectation
 
 
-class DistributionDriftScenario(Scenario):
+class DistributionDriftScenario(DataScenario):
     name = "distribution_drift"
     description = "Subtle ~2x upward shift in recent amounts (no hard violation)"
     recent_fraction = 0.25
+
+    expectation = Expectation(
+        signal_type="assertion_failure",
+        change_type="distribution_drift",
+        root_table="raw_transactions",
+        root_column="amount",
+        actions=["tag_asset", "repoint_model"],
+        note="The distribution trip-wire assertion catches this; the plain range "
+             "check does not.",
+    )
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         clause = self.recent_clause(con)

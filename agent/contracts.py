@@ -30,6 +30,9 @@ class SignalType(str, Enum):
     DEPENDENCY_CHANGE = "dependency_change"    # external package / API breaking change
     CODE_CHANGE = "code_change"                # a commit altered a transform/model
     TRAINING_REGRESSION = "training_regression"  # model eval metric regressed
+    VOLUME_ANOMALY = "volume_anomaly"          # row count collapsed / exploded
+    LABEL_LEAKAGE = "label_leakage"            # the target leaked into a feature
+    TRAINING_SERVING_SKEW = "training_serving_skew"  # serve-time features != train-time
 
 
 class ActionType(str, Enum):
@@ -38,6 +41,7 @@ class ActionType(str, Enum):
     PAUSE_JOB = "pause_job"              # stop a downstream job
     TAG_ASSET = "tag_asset"             # mark downstream "do-not-trust"
     QUARANTINE = "quarantine"           # isolate a bad partition
+    DEDUPE_PARTITION = "dedupe_partition"  # drop duplicate keys from a re-delivered batch
 
 
 class AutonomyTier(str, Enum):
@@ -56,6 +60,12 @@ class ChangeType(str, Enum):
     DEPENDENCY_CHANGE = "dependency_change"    # external package / API break
     CODE_CHANGE = "code_change"                # a source change altered behavior
     TRAINING_REGRESSION = "training_regression"  # model eval metric regressed
+    MODEL_DRIFT = "model_drift"                # prediction distribution shifted
+    FRESHNESS_LAG = "freshness_lag"            # the feed stopped delivering
+    VOLUME_ANOMALY = "volume_anomaly"          # row count collapsed / exploded
+    LABEL_LEAKAGE = "label_leakage"            # the target leaked into a feature
+    DUPLICATE_RECORDS = "duplicate_records"    # a batch was delivered twice
+    TRAINING_SERVING_SKEW = "training_serving_skew"  # serve-time features != train-time
     UNKNOWN = "unknown"
 
 
@@ -100,6 +110,8 @@ class ActionRecord:
     inverse: Optional["ActionRecord"] = None  # populated by act(); replayed by undo()
     applied_at: Optional[datetime] = None
     note: str = ""
+    incident_id: str = ""       # which incident this action belongs to (journal key)
+    status: str = "planned"     # planned | applied | simulated | reverted | failed
 
 
 @dataclass
@@ -175,6 +187,30 @@ class PostMortem:
     resolved_at: Optional[datetime] = None
 
 
+@dataclass
+class ShadowResult:
+    """Outcome of trying a candidate fix in an isolated clone before touching
+    production ("parallel universe"). `passed` gates whether act() proceeds; the
+    metric delta becomes the evidence attached to the fix PR."""
+    passed: bool
+    checks_run: list[str] = field(default_factory=list)
+    failures: list[str] = field(default_factory=list)
+    metrics_before: dict = field(default_factory=dict)
+    metrics_after: dict = field(default_factory=dict)
+    note: str = ""
+
+
+@dataclass
+class TrustScore:
+    """A live reliability score written onto an asset in DataHub, so a human
+    reading the catalog sees the same health the agent sees."""
+    asset_urn: str
+    score: float                 # 0..100
+    grade: str                   # A | B | C | D
+    inputs: dict = field(default_factory=dict)  # the signals behind the score
+    computed_at: Optional[datetime] = None
+
+
 # --------------------------------------------------------------------------- #
 # The mechanism interface (verbs). Implemented by fakes.py, then for real.
 # --------------------------------------------------------------------------- #
@@ -209,11 +245,23 @@ class Mechanisms(Protocol):
         """Write the incident + post-mortem back into DataHub."""
         ...
 
+    def inject_failure(self, scenario_name: str) -> Optional[Incident]:
+        """Fire drill: deliberately break the pipeline to prove the loop heals it.
+        Returns the incident the injection produced, if any."""
+        ...
+
+    def shadow_validate(self, incident: Incident, fix: str) -> ShadowResult:
+        """Try a candidate fix in an isolated clone and report the before/after
+        delta, without touching production."""
+        ...
+
 
 # --------------------------------------------------------------------------- #
 # Plugin interfaces — the extension surfaces of the investigation platform.
-# New incident classes are added by registering new Detectors / Probes, and new
-# memory backends by implementing MemoryStore. The RCA core does not change.
+# A new incident class is a Detector (how we notice) + a Probe (how we gather
+# grounded evidence) + optionally an Actuator (how we fix it) and a CheckRunner
+# (how we prove the fix worked). Memory backends implement MemoryStore. Adding
+# any of these is a new module plus a decorator — the RCA core does not change.
 # --------------------------------------------------------------------------- #
 class Detector(Protocol):
     """Emits Signals (Incidents) from a source: DataHub assertions, model drift,
@@ -248,4 +296,32 @@ class MemoryStore(Protocol):
         """Return prior incidents relevant to this one. When change_type is given,
         only incidents of the same kind are returned (so unrelated past incidents
         on the same asset don't mislead RCA)."""
+        ...
+
+
+class Actuator(Protocol):
+    """Performs ONE reversible mitigation. Every actuator must be able to undo
+    itself exactly — that guarantee is what lets the agent act without a human
+    watching. `apply` returns the record with `inverse` populated; `revert`
+    replays that inverse."""
+    name: str
+    action_type: ActionType
+
+    def apply(self, action: ActionRecord) -> ActionRecord:
+        ...
+
+    def revert(self, action: ActionRecord) -> bool:
+        ...
+
+
+class CheckRunner(Protocol):
+    """One validation source for the post-mitigation gate: dbt tests, model eval,
+    data invariants. Several run per asset and their verdicts are ANDed, because
+    some incidents (stale feed, volume collapse) leave every dbt test passing."""
+    name: str
+
+    def applies_to(self, asset_urn: str) -> bool:
+        ...
+
+    def run(self, asset_urn: str) -> ValidationResult:
         ...

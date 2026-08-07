@@ -19,19 +19,192 @@ Legend: ✅ done · 🔨 in progress · ⬜ todo
 
 ---
 
+## Build phases
+
+Work ships one phase at a time. Each phase ends with a written review, updates to
+this file and the README, and a commit — nothing starts until the previous phase
+is signed off.
+
+| Phase | Scope | Status |
+|---|---|---|
+| **0** | Structural repairs + foundation modules (behaviour-neutral) | ✅ |
+| **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
+| **2** | Six new threat classes (detectors, probes, scenarios) | ✅ |
+| **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ✅ |
+| **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ⬜ |
+| **5** | *(optional)* Intelligence-plane remainder: #6 Comms, #7 Cost Meter, #12 Ask-the-On-Call, git-commit detector | not scheduled |
+
+### Who each phase serves
+
+| Phase | Srinjoy (Mechanism) | Arkajyoti (Intelligence) |
+|---|---|---|
+| 0 | contract, registries, journal, snapshots, dbt/model/git readers | `ActionJournal` for #8; `source_file_for()` for #2; RCA enum-parity fix |
+| 1 | `run_checks`, `act`/`undo`, `write_back`, planner + policy, **#1**, **#4** | **#5** post-mortems on the model card + precedent recall |
+| 2 | 6 detectors + probes; RCA signal→change-type map | RCA prompt quality; richer `PostMortem` corpus for #10 |
+| 3 | **#2** Drift Attribution, **#3** Parallel Universe, **#11** `inject_failure()` | **#8** Shadow Mode, **#9** Trust Badges, **#10** Runbook→Skill |
+| 4 | scenario expectation harness | **#11** fire-drill orchestration via `verify --all` |
+
+Neither plane waits on the other: every phase moves both.
+
+### Phase 0 — what landed
+
+*Behaviour-neutral by design: the six existing scenarios behave exactly as before.
+This phase built the machinery Phase 1 actuates with.*
+
+| Repair | Why it was needed |
+|---|---|
+| `BaseScenario` ABC → `DataScenario` / `AdvisoryScenario` / `ModelScenario` | scenarios were three unrelated shapes held together by duck-typing; six more would have made a fourth |
+| `PipelineReset` + per-scenario `cleanup()` | `reset()` was a `@staticmethod` on a scenario class and structurally couldn't restore ML-side state |
+| `scenarios/registry.py` | the scenario list lived in `__main__.py`; three consumers now need it |
+| `@actuator` / `@check` registries, signature-inspecting `_build` | `except TypeError` silently swallowed constructor errors; skipped plugins are now reported |
+| `CodebaseMemory.source_file_for()` | the producer map already knew SQL file → asset; Drift Attribution needs it read backwards |
+| `RCAResult.change_type` → the `ChangeType` enum | the hand-written `Literal` listed 6 of 9 values, forcing the LLM into a wrong value for the rest. Now 15/15, and drift is impossible |
+
+| New foundation module | Role |
+|---|---|
+| `agent/journal.py` — `ActionJournal` | append-only action + inverse log at `.sentinel/journal.jsonl`; rollback source, audit trail, and shadow-digest input |
+| `agent/tools/warehouse/snapshots.py` | point-in-time table copies; what the Time Machine restores from. Verified exact via content fingerprint |
+| `agent/tools/warehouse/dbt_runner.py` | one dbt invocation path; parses `run_results.json` so the gate names failing assertions instead of only knowing something failed |
+| `agent/tools/warehouse/baselines.py` | the pipeline's healthy shape — the only way silent failures are visible |
+| `agent/tools/warehouse/champion.py` | single MLflow registry read; `last_good()` picks the rollback target |
+| `agent/tools/warehouse/duck.py` | retries the transient DuckDB lock held by an exiting dbt subprocess (unplanned; found during verification) |
+| `agent/tools/code/git_history.py` | read-only `git log`/`blame` for commit attribution |
+| `ml/drift.py` | drift maths shared by the scoring job and the drift detector, so they cannot disagree |
+
+Contract additions were strictly additive: `SignalType` 7→10, `ChangeType` 9→15,
+`ActionType` 5→6, plus `ShadowResult`, `TrustScore`, and the `Actuator` /
+`CheckRunner` Protocols. No existing field renamed or removed.
+
+### Phase 1 — what landed
+
+*The agent now does what it says it does. `RealMechanisms` no longer delegates
+anything to `FakeMechanisms`.*
+
+**Six actuators**, each with a working inverse (`agent/tools/actuators/`):
+
+| Actuator | Real effect | Inverse |
+|---|---|---|
+| `pin_feature` | restores a table from `last_good`, rebuilds downstream | restore the pre-action snapshot |
+| `quarantine` | moves rows outside the healthy range into `sentinel_quarantine.<table>__<incident>` | restore the pre-action snapshot |
+| `dedupe_partition` | drops duplicate keys, keeping first arrival | restore the pre-action snapshot |
+| `repoint_model` | moves the MLflow `champion` alias to the newest *validated* healthy version | point it back |
+| `tag_asset` | adds `Sentinel-Degraded` to downstream assets in DataHub | remove it |
+| `pause_job` | opens a breaker file; **`ml/score.py` refuses to score while it is open** | close it |
+
+**Three validation checks**, ANDed (`agent/tools/checks/`): `dbt_tests` (real
+assertion results by name), `model_eval` (champion inside a *bounded* metric band
+— too high is leakage, not success), and `data_invariants` (volume and freshness
+against the recorded baseline, which is the only thing that can see a stale feed
+or a collapsed batch, since dbt stays green through both).
+
+**Decision-making extracted from the loop:** `agent/policy.py` and
+`agent/planner.py`. The planner is a `ChangeType → recipe` table, so what the
+agent will do about a null spike is readable without reading the code that does
+it. The policy finally has teeth — `HUMAN_ONLY` now genuinely blocks mutating
+actions instead of only adding a PR.
+
+The autonomy model splits actions by what they touch. **Protective** actions
+(tag, pause) only ever reduce harm, so they run at every tier — withholding them
+while waiting for a human is itself the risky choice. **Mutating** actions (pin,
+quarantine, dedupe, repoint) change data or what is serving, and need confidence
+behind them. `PII` plus a diagnosis below high confidence is the one combination
+that drops to protective-only.
+
+**Two bugs found by verification, not by review:**
+
+- Both warehouse actuators in one plan snapshotted the same restore label, so the
+  second silently overwrote the first's way back. A rollback would have restored
+  an intermediate state and lost the quarantined rows. Restore points are now per
+  *action*, not per incident.
+- `python -m ml.score` crashed with `UnicodeEncodeError` whenever its output was
+  piped, because Windows selects cp1252 for redirected stdout. Fixed at the entry
+  points (`agent/console.py`) rather than by avoiding punctuation.
+
+### Phase 2 — what landed
+
+*Five detectors, six probes, six scenarios. The agent can now see the failures
+that leave every assertion green.*
+
+| Threat | Detection | Outcome |
+|---|---|---|
+| `stale_feed` | `FreshnessDetector` — lag vs the **baseline's** newest row, not wall-clock (the seed data is synthetic and already days old, so a clock check would fire permanently) | **contained** |
+| `volume_collapse` | `VolumeAnomalyDetector` — row counts vs baseline | **repaired** (pin) |
+| `model_drift` | `ModelDriftDetector` — scoring snapshot vs baseline through `ml/drift.py` | **repaired** (repoint) |
+| `training_serving_skew` | `TrainingServingSkewDetector` — serving means vs the champion's `train_mean_*` | **contained** |
+| `label_leakage` | `LabelLeakageDetector` — `roc_auc` **above** a ceiling | **repaired** + code fix |
+| `duplicate_batch` | reuses `DataHubAssertionDetector` | **repaired** (dedupe) |
+
+**Three of these leave all 22 dbt assertions passing.** That is the point: a
+pipeline can be badly wrong while every test it has says otherwise.
+
+**Containment as a first-class outcome.** Some incidents cannot be repaired from
+here — data that never arrived cannot be restored from a snapshot. Previously the
+gate would go red, and the agent would respond by **reverting the circuit breaker
+and letting the pipeline keep serving bad data**. Now a plan made only of
+protective actions is recognised as containment: the tags and breaker hold, a
+post-mortem is recorded as *contained, awaiting human*, `Sentinel-Resolved` is
+withheld, and the incident stays visibly open. When an incident *is* genuinely
+repaired, the protection is lifted automatically — a breaker that outlives its
+incident is how people learn to ignore breakers.
+
+**Correctness fixes this phase depended on:**
+
+| Fix | What it prevented |
+|---|---|
+| `SIGNAL_TO_CHANGE` table in `rca.py` | five of six new classes would have been classified `unknown` and received the do-nothing fallback recipe |
+| `_asset_urn` / `upstream_path` urn guards | three detectors fire on **mlModel** urns, where the old code invented a dataset urn that does not exist and used it as an action target |
+| `ModelInputCheck` | the gate only measured `roc_auc`, which is *fine* during a skew incident — the agent declared victory over a problem it had only contained |
+| Selective rollback | see containment above |
+| `identify_leaks` — floor **plus** dominance over the runner-up | an absolute correlation threshold either missed the real leak (0.70) or would flag genuinely predictive features |
+| `classify()` all-null rule | **latent bug in existing code**: `schema_change` had always resolved to `unknown`/low confidence, because the renamed column still exists and is simply empty |
+| `_readable` on the DataHub assertion path | incidents read `1 failed assertion: a321883ce7` |
+| champion restore uses the healthy band | `reset` would have reinstated the **leaked** 0.998 model, since every trained version is tagged validated |
+
+### Phase 3 — what landed
+
+*The last six features. Both planes are now complete except the three
+Intelligence items deliberately left out of scope.*
+
+| # | Feature | How it works |
+|---|---|---|
+| **2** | Drift Attribution | `GitBlameProbe` reads `CodebaseMemory`'s producer map **backwards** — the index that maps a source file to the asset it produces already existed for dependency tracing, so an asset resolves to a file and git resolves it to a commit. The RCA narrative now names the author and sha. |
+| **11** | Fire Drill | `inject_failure()` on the contract, driven by `python -m agent drill <scenario>`: break it, detect, root-cause, mitigate, validate. The pass condition is the scenario's own declared expectation, so a drill checks the agent noticed *the right thing*. |
+| **3** | Parallel Universe | `ShadowEnvironment` scores a candidate model version against today's data **without touching the champion alias**, and parses a generated fix before proposing it. The before/after appears inline in the action note and in the PR body. |
+| **8** | Shadow Mode + Digest | `python -m agent --shadow` reasons all the way to a plan and journals it as `simulated`, applying nothing; `python -m agent digest` aggregates the journal into incidents handled and hours saved. |
+| **9** | Trust Badges | `TrustScorer` writes a 0-100 score and an A–D grade onto each asset from failing assertions, open incidents, volume and freshness deviation, and incident history. Refreshed on every close — including a contained one, which is when a low grade matters most. |
+| **10** | Runbook → Skill | `RunbookSynthesizer` reads back the accumulated post-mortems, generalises the procedure that is already implicit in them, and registers it as a real DataHub **`AgentSkill`** entity with `name` / `description` / `instructions`. |
+
+**On #10:** the plan flagged Skill registration as an open question with a
+GlossaryTerm fallback. `AgentSkillInfoClass` turned out to exist in
+`acryl-datahub==1.7.0` with exactly the right shape, so no fallback was needed.
+One trap: `requiredTools` holds DataHub **urns** despite the name, and rejects
+prose — the tool list lives inside `instructions` instead.
+
+**Two bugs found by verification:**
+
+- `TrustScorer` never stored `gms_server`, so its failed-assertion lookup raised
+  `AttributeError` into a broad `except` and every asset scored as though its
+  tests passed. A **broken pipeline was being graded A.**
+- The shadow model comparison failed on incomplete rows — meaning the preview was
+  unavailable during exactly the incidents where a rollback gets proposed. It now
+  scores the rows it can.
+
+---
+
 ## Shared foundation (done — Srinjoy)
 
 | Component | Status |
 |---|---|
 | Environment: DataHub quickstart, dbt+DuckDB pipeline, MLflow model + scoring | ✅ |
 | Ingestion + end-to-end lineage + governance (tags/owners) | ✅ |
-| Incident scenarios (`unit_bug`, `null_spike`, `reset`) as classes | ✅ |
+| Incident scenarios as a proper class hierarchy + declarative expectations | ✅ |
 | `contracts.py` (data objects + `Mechanisms` interface) + `fakes.py` | ✅ |
 | Orchestrator loop (`agent/orchestrator.py`) | ✅ |
 | Core LLM client (`agent/llm.py`, OpenRouter) + structured output | ✅ |
-| Extensible investigation platform: Detector/Probe/Memory plugin registries | ✅ |
+| Extensible platform: Detector/Probe/**Actuator**/**CheckRunner**/Memory registries | ✅ |
 | Grounded RCA engine (`agent/rca.py`) — probes + memory + structured synthesis | ✅ |
 | Pluggable memory: `DataHubMemory` (record/recall) + `CodebaseMemory` | ✅ |
+| Remediation foundation: journal, snapshots, baselines, dbt/model/git readers | ✅ |
 
 ### Incident classes implemented (each a Detector + Probe plugin)
 
@@ -51,27 +224,57 @@ plus the mechanism-side features.
 
 ### Core tools (the contract)
 
-| Fn / Tool | Feature | Status |
-|---|---|---|
-| `detect_incidents()` | multi-detector registry: assertions + dependency + training | ✅ |
-| `read_context()` | real lineage / schema / tags / owners | ✅ |
-| `run_checks()` | real dbt test / assertion re-run (validation gate) | ⬜ |
-| `act()` / `undo()` | **#1 Time Machine** — MLflow stage swap + feature pin, journaled with inverses | ⬜ |
-| `write_back()` | **#4 Circuit Breaker** — open incident, tag downstream "degraded", auto-restore | ⬜ |
-| `propose_fix()` | **CodeFixTool** — LLM-generated migration diff + draft PR | ✅ |
+| Fn / Tool | Feature | Phase | Status |
+|---|---|---|---|
+| `detect_incidents()` | multi-detector registry: assertions + dependency + training | pre-phase | ✅ |
+| `read_context()` | real lineage / schema / tags / owners | pre-phase | ✅ |
+| `run_checks()` | real dbt test / model eval / data invariants, ANDed | **1** | ✅ |
+| `act()` / `undo()` | **#1 Time Machine** — 6 actuators, every one journaled with its inverse | **1** | ✅ |
+| `write_back()` | **#4 Circuit Breaker** — post-mortem to asset + model card, degraded tags auto-cleared | **1** | ✅ |
+| `propose_fix()` | **CodeFixTool** — LLM-generated migration diff + draft PR | pre-phase | ✅ |
+| `inject_failure()` | **#11 Fire Drill** — `python -m agent drill <scenario>` | **3** | ✅ |
+| `shadow_validate()` | **#3 Parallel Universe** — candidate scoring + fix syntax check | **3** | ✅ |
+
+**Contract coverage: 8/8 complete.**
+
+**Verified against live DataHub, not asserted:** on a `unit_bug` incident the
+agent quarantined 1074 real rows, restored `raw_transactions` from 6926 back to
+8000, tagged 2 downstream assets, and passed a 29-check gate. Rolling the
+incident back returned the table to fingerprint
+`8000:74032610348716427358176` — byte-for-byte the poisoned state recorded before
+the run — and the assertions failed again, which is the proof the mitigation had
+been real. On `training_regression` the champion alias moved v2 → v1.
 
 ### Mechanism-side features
 
-| # | Feature | Status |
-|---|---|---|
-| 1 | **Time Machine** — one-click reversible rollback (via `act`/`undo`) | ⬜ |
-| 4 | **Smart Circuit Breaker** — tag/quarantine downstream + auto-restore | ⬜ |
-| 2 | **Drift Attribution** — walk lineage upstream, correlate to the breaking commit | ⬜ |
-| 3 | **Parallel Universe / Shadow Scoring** — apply fix in a clone, diff before/after as PR proof | ⬜ |
-| 11 | **Fire Drill** — `inject_failure()` mechanism (orchestration handed to Arkajyoti) | ⬜ |
+| # | Feature | Phase | Status |
+|---|---|---|---|
+| 1 | **Time Machine** — one-click reversible rollback (via `act`/`undo`) | **1** | ✅ |
+| 4 | **Smart Circuit Breaker** — tag/quarantine downstream + auto-restore | **1** | ✅ |
+| 2 | **Drift Attribution** — walk lineage upstream, correlate to the breaking commit | **3** | ✅ |
+| 3 | **Parallel Universe / Shadow Scoring** — apply fix in a clone, diff before/after as PR proof | **3** | ✅ |
+| 11 | **Fire Drill** — `inject_failure()` mechanism | **3** | ✅ |
+
+**Mechanism-side features: 5/5 complete.**
 
 Build order: `run_checks` → **Time Machine** → **Circuit Breaker** →
-**Drift Attribution** → Parallel Universe. Cut from the bottom if time runs short.
+**Drift Attribution** → Parallel Universe. All five are in the phase plan rather
+than cut from the bottom.
+
+### Detector coverage (the incident classes)
+
+| Class | Phase | Status |
+|---|---|---|
+| Data (assertion + profiling) | pre-phase | ✅ |
+| Dependency / API break | pre-phase | ✅ |
+| ML training regression | pre-phase | ✅ |
+| Model drift | **2** | ✅ |
+| Freshness / SLA | **2** | ✅ |
+| Volume anomaly | **2** | ✅ |
+| Label leakage | **2** | ✅ |
+| Duplicate records | **2** | ✅ (reuses the assertion detector; new probe + remediation) |
+| Training/serving skew | **2** | ✅ |
+| **Git-commit-as-signal** | **not scheduled** | ⬜ — see Not scheduled below |
 
 ---
 
@@ -80,29 +283,47 @@ Build order: `run_checks` → **Time Machine** → **Circuit Breaker** →
 Consumes `Incident`, `ContextBundle`, and `PostMortem` through the contract.
 Builds entirely against `fakes.py` until Srinjoy's real tools land — no blocking.
 
-| # | Feature | What it needs from the contract | Status |
-|---|---|---|---|
-| 5 | **Organizational Memory** — post-mortems embedded on the model card; incident #2 resolves faster by citing #1 | `PostMortem` objects the loop emits | ⬜ |
-| 6 | **Audience-Aware Comms** — one incident → 3 tailored messages (ML eng / data scientist / product) | `ContextBundle.owners`, `tags` | ⬜ |
-| 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage ("~$12K exposure") | `ContextBundle.downstream` + usage stats | ⬜ |
-| 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | ⬜ |
-| 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | ⬜ |
-| 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Srinjoy wires Skill registration | ⬜ |
-| 12 | **Ask the On-Call** — chat over incident memory | Memory (#5) | ⬜ |
-| — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | 🔨 |
-| 11 | **Fire Drill orchestration** — drive Srinjoy's `inject_failure()` to prove self-healing (stretch) | `inject_failure()` | ⬜ |
+| # | Feature | What it needs from the contract | Phase | Status |
+|---|---|---|---|---|
+| 5 | **Organizational Memory** — post-mortems embedded on the model card; incident #2 resolves faster by citing #1 | `PostMortem` objects the loop emits | **1** | ✅ recall + precedent citation working; model-card write landed Phase 1 |
+| 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | **3** | ✅ `python -m agent --shadow` / `digest` |
+| 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | **3** | ✅ `python -m agent badges` |
+| 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Skill registration | **3** | ✅ registered as a real `AgentSkill` entity |
+| 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ✅ `python -m agent drill <scenario>`; matrix in Phase 4 |
+| — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | **0 + 2** | 🔨 enum-parity fix landed Phase 0; signal→change-type map in Phase 2 |
+| 6 | **Audience-Aware Comms** — one incident → 3 tailored messages | `ContextBundle.owners`, `tags` | **not scheduled** | ⬜ unblocked, not built |
+| 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage | `ContextBundle.downstream` + usage stats | **not scheduled** | ⬜ unblocked, not built |
+| 12 | **Ask the On-Call** — chat over incident memory | Memory (#5) | **not scheduled** | ⬜ unblocked, not built |
 
-Priority: **Memory (#5) first** — it's the moat, and #10 and #12 depend on it.
-Then Comms (#6), Cost Meter (#7), Trust Badges (#9). Shadow Digest (#8) and
-Ask-the-On-Call (#12) are first cuts. Skill synthesis (#10) never gets cut — it's
-the OSS tiebreaker.
+**Intelligence-plane coverage: 6/9 complete, 3 not scheduled** (#6, #7, #12 —
+see below).
+
+### Not scheduled — and why
+
+Four items sit outside the current phase plan. This is a scope decision, not an
+oversight, and each is genuinely unblocked: the contract surface it needs already
+exists and is exercised by working code.
+
+| Item | What it would need | Why it is unblocked today |
+|---|---|---|
+| #6 Audience-Aware Comms | a formatter over an incident + its owners | `ContextBundle.owners` / `tags` are real; `PostMortem` carries the narrative and blast radius |
+| #7 Cost-of-Incident Meter | blast radius × a usage/cost model | `ContextBundle.downstream` is real; `ActionJournal` timestamps give incident duration |
+| #12 Ask the On-Call | a chat loop over recalled post-mortems | `MemoryStore.recall()` works and already returns cited precedent |
+| Git-commit-as-signal detector | a `@detector` reading recent commits to pipeline sources | `GitHistory` (Phase 0) + `CodebaseMemory.source_file_for()` (Phase 0) do the reading; only the detector wrapper is missing |
+
+Adding them would be a **Phase 5**. Each is small precisely because the phases
+below built the surfaces they consume.
 
 ---
 
 ## Integration points (when we must sync)
 
-1. **Contract is frozen** — `agent/contracts.py` is the treaty. Any change to a
-   data object or function signature is a two-person decision.
+1. **Contract is additive-only** — `agent/contracts.py` is the treaty. New enum
+   members, dataclasses and Protocols may be added; renaming or removing an
+   existing field is a two-person decision. Phase 0 added `SignalType` 7→10,
+   `ChangeType` 9→15, `ActionType` 5→6, `ShadowResult`, `TrustScore`, and the
+   `Actuator` / `CheckRunner` Protocols — nothing existing changed, so code
+   written against the old types still compiles.
 2. **Integration pass** — Arkajyoti swaps `FakeMechanisms` for `RealMechanisms`
    as Srinjoy's tools land, one function at a time. Do this early and often, not
    the night before.
@@ -127,25 +348,37 @@ Status: ✅ done · 🔨 partial · ⬜ not started
 The intelligence is real; the *actions* are still stubbed. This is what converts
 "an agent that explains" into "an agent that fixes."
 
-- ⭐ **Time Machine** ⬜ — real reversible mitigations: MLflow champion repoint to
-  last-good version, feature-table pinning to a snapshot, view-swap. Every action
-  journaled with its inverse.
-- ⭐ **Validation gate** ⬜ — real `run_checks` (re-run dbt tests / model eval) after
-  a fix; **auto-rollback via the journal if it fails**. This closed loop is the
-  core safety story.
-- ⭐ **Circuit Breaker** ⬜ — tag downstream assets "do-not-trust" in DataHub, pause
-  dependent jobs (Airflow/Dagster), auto-restore on resolution.
-- **Quarantine / backfill** ⬜ — isolate a bad partition; trigger a corrected backfill.
-- **Real multi-file / multi-repo PRs** 🔨 — CodeFixTool opens single-file PRs today;
-  extend to multi-file migrations, run the test suite on the fix, and scan across
-  many repos in an org.
-- **Fix verification** ⬜ — apply the generated migration in a sandbox and run tests
-  before proposing (Parallel-Universe / shadow validation).
+- ⭐ **Time Machine** ✅ — MLflow champion repoint to the last *validated* version,
+  table pinning to a snapshot, quarantine, dedupe. Every action journaled with its
+  inverse; rollback verified exact by content fingerprint.
+- ⭐ **Validation gate** ✅ — real `run_checks` (dbt tests + model eval + data
+  invariants) after a fix, with **auto-rollback via the journal if it fails**.
+  The closed loop is the core safety story and it is now genuinely closed.
+- ⭐ **Circuit Breaker** ✅ — downstream assets tagged `Sentinel-Degraded` in
+  DataHub and the scoring job paused via a breaker `ml/score.py` honours; both
+  auto-restored on resolution. Airflow/Dagster pausing is still ⬜.
+- **Quarantine / backfill** 🔨 — bad rows are isolated into a `sentinel_quarantine`
+  table named for the incident; triggering a corrected backfill is still ⬜.
+- **Real multi-file / multi-repo PRs** 🔨 — CodeFixTool now takes a generic
+  `(file, instruction)` request rather than only understanding vendor advisories,
+  so any incident class can earn a code fix — a label leak produces a diff
+  removing the leaking feature from `ml/config.py`. Still single-file; multi-file
+  migrations, running the test suite on the fix, and org-wide scanning remain ⬜.
+- **Fix verification** 🔨 — a generated fix is parsed before it is proposed, and a
+  rollback target is scored before promotion. Running the full test suite on a
+  proposed fix is still ⬜.
 
 ## 2. Detection — more signal sources (Detector plugins)
-- ⭐ **Model-drift detector** ⬜ — prediction-distribution shift from the scoring loop
-  (pairs with `distribution_drift`, catches silent model rot with no assertion).
-- ⭐ **Freshness / SLA detector** ⬜ — stale tables / late pipelines.
+- ⭐ **Model-drift detector** ✅ — prediction-distribution shift from the scoring loop,
+  sharing `ml/drift.py` with the scoring job so the two cannot disagree.
+- ⭐ **Freshness / SLA detector** ✅ — lag measured against the recorded healthy
+  baseline rather than wall-clock.
+- **Volume-anomaly detector** ✅ — row counts vs baseline, catching both a thin
+  delivery and a re-delivered batch.
+- **Label-leakage detector** ✅ — a champion scoring *above* a ceiling, with the
+  leaking feature named by correlation dominance.
+- **Training/serving-skew detector** ✅ — serving feature means vs the champion's
+  logged training distribution.
 - **Git-commit detector** ⬜ — a commit to a transform/model/prompt as a signal.
 - **Real dependency diff** 🔨 — diff `requirements`/`poetry.lock` over time (today
   we read hand-authored advisories); ingest vendor changelogs / GitHub releases /
@@ -158,8 +391,9 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 ## 3. Investigation — more probes (Probe plugins)
 - **Schema-history / timeline probe** ⬜ — DataHub timeline API: exactly what changed
   and when (pin the change to a timestamp → correlate to a commit/deploy).
-- **Git-blame probe** ⬜ — the exact commit + author behind a change (Drift Attribution).
-- **Training/serving-skew probe** ⬜ — feature distributions at train vs serve time.
+- **Git-blame probe** ✅ — the exact commit + author behind a change; the RCA
+  narrative now names it.
+- **Training/serving-skew probe** ✅ — feature distributions at train vs serve time.
 - **Cross-incident correlation** 🔨 — basic same-root dedupe exists; add semantic
   clustering of simultaneous incidents to one root cause.
 - **LLM-pipeline probes** ⬜ — prompt-template diff, tokenizer/config change, eval-set
@@ -168,26 +402,29 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 ## 4. Memory & knowledge (the compounding moat)
 - **Vector memory** ⬜ — embeddings for semantic recall of similar past incidents
   (today: same-asset + same-change-type filter).
-- **Runbook → DataHub Skill** ⬜ — synthesize a runbook from repeated incidents and
-  register it as a Skill (also the OSS-contribution tiebreaker).
+- **Runbook → DataHub Skill** ✅ — synthesised from repeated post-mortems and
+  registered as a DataHub `AgentSkill` entity.
 - **CodebaseMemory → DataHub** ⬜ — ingest code files as assets so code↔data lineage
   lives in the graph, not just in-process.
 - **MTTR / learning analytics** ⬜ — track resolution time trending down as memory grows.
 
 ## 5. Autonomy, policy & governance
-- **Tiered autonomy** 🔨 — tag-driven auto / PR-only / human today; expand with
-  blast-radius- and confidence-based gating.
-- ⭐ **Shadow mode + savings digest** ⬜ — propose-only mode with "would have resolved
-  N incidents, saved M hours" — the enterprise adoption on-ramp.
+- **Tiered autonomy** ✅ — tags, RCA confidence and blast radius decide the tier,
+  and the tier genuinely gates what runs: protective actions at every tier,
+  mutating actions withheld under `HUMAN_ONLY`.
+- ⭐ **Shadow mode + savings digest** ✅ — `python -m agent --shadow` plans and
+  records without applying; `python -m agent digest` reports what it would have done.
 - **Human-in-the-loop approvals** ⬜ — approve/deny an action from Slack.
-- **Audit log** ⬜ — every agent action + its inverse, immutable and reviewable.
+- **Audit log** ✅ — `ActionJournal` writes every action + its inverse to
+  `.sentinel/journal.jsonl`, append-only and replayable (Phase 0).
 
 ## 6. Product surface (what users actually touch)
 - ⭐ **Slack/Teams integration** ⬜ — incident channel, audience-aware messages
   (engineer vs analyst vs exec), approve-from-chat.
 - ⭐ **Web dashboard** ⬜ — incident list, timeline, RCA, blast radius, MTTR.
 - **Cost-of-incident meter** ⬜ — $ impact from blast radius × usage.
-- **Trust badges / health scores** ⬜ — live reliability score written onto DataHub assets.
+- **Trust badges / health scores** ✅ — a 0-100 score and A–D grade written onto
+  each asset, refreshed whenever an incident closes.
 - **Ask-the-on-call** ⬜ — chat over incident memory.
 - **Paging** ⬜ — PagerDuty / Opsgenie for human-tier incidents.
 

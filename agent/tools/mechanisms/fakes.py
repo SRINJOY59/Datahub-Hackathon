@@ -27,6 +27,7 @@ FEATURE_URN = "urn:li:dataset:(urn:li:dataPlatform:dbt,fraud_demo.fraud.main.fea
 class FakeMechanisms(Mechanisms):
     def __init__(self) -> None:
         self._healthy = False  # flips to True after a successful fix
+        self._applied: list[ActionRecord] = []
 
     def detect_incidents(self) -> list[Incident]:
         if self._healthy:
@@ -84,6 +85,7 @@ class FakeMechanisms(Mechanisms):
 
     def act(self, action: ActionRecord) -> ActionRecord:
         action.applied_at = datetime.now(timezone.utc)
+        action.status = "applied"
         action.inverse = ActionRecord(
             action_type=action.action_type,
             target=action.target,
@@ -92,12 +94,22 @@ class FakeMechanisms(Mechanisms):
         )
         if action.action_type in (ActionType.REPOINT_MODEL, ActionType.PIN_FEATURE):
             self._healthy = True
+        self._applied.append(action)
         return action
 
     def undo(self, action: ActionRecord) -> bool:
         if action.action_type in (ActionType.REPOINT_MODEL, ActionType.PIN_FEATURE):
             self._healthy = False
+        action.status = "reverted"
         return True
+
+    def rollback(self, incident_id: str) -> tuple[int, int]:
+        """Mirror the real journal's contract: unwind in reverse order."""
+        reverted = 0
+        for action in reversed([a for a in self._applied if a.status == "applied"]):
+            if self.undo(action):
+                reverted += 1
+        return reverted, 0
 
     def propose_fix(self, incident: Incident, context: ContextBundle,
                     root_cause: str) -> str:
