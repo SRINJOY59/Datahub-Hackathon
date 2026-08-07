@@ -4,12 +4,15 @@
     python -m scenarios unit_bug             # inject the unit-bug incident
     python -m scenarios reset                # restore a clean, healthy pipeline
     python -m scenarios snapshot             # capture the last-known-good state
+    python -m scenarios verify --all         # check every scenario against its
+                                             # declared expectation
 
     add --no-reingest to skip the DataHub refresh (faster local iteration)
 """
 from __future__ import annotations
 
 import argparse
+import sys
 
 from scenarios import registry
 from scenarios.base import PipelineReset, capture_last_good
@@ -23,8 +26,14 @@ def main() -> None:
     except ImportError:
         pass
 
+    # `verify` has its own flags, so it takes the rest of the command line.
+    if len(sys.argv) > 1 and sys.argv[1] == "verify":
+        from scenarios.verify import main as verify_main
+
+        raise SystemExit(verify_main(sys.argv[2:]))
+
     ap = argparse.ArgumentParser(prog="scenarios")
-    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', or 'list'")
+    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', 'verify', or 'list'")
     ap.add_argument("--no-reingest", action="store_true")
     args = ap.parse_args()
 

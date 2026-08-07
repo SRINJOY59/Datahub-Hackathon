@@ -31,7 +31,7 @@ is signed off.
 | **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
 | **2** | Six new threat classes (detectors, probes, scenarios) | ✅ |
 | **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ✅ |
-| **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ⬜ |
+| **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ✅ |
 | **5** | *(optional)* Intelligence-plane remainder: #6 Comms, #7 Cost Meter, #12 Ask-the-On-Call, git-commit detector | not scheduled |
 
 ### Who each phase serves
@@ -42,7 +42,7 @@ is signed off.
 | 1 | `run_checks`, `act`/`undo`, `write_back`, planner + policy, **#1**, **#4** | **#5** post-mortems on the model card + precedent recall |
 | 2 | 6 detectors + probes; RCA signal→change-type map | RCA prompt quality; richer `PostMortem` corpus for #10 |
 | 3 | **#2** Drift Attribution, **#3** Parallel Universe, **#11** `inject_failure()` | **#8** Shadow Mode, **#9** Trust Badges, **#10** Runbook→Skill |
-| 4 | scenario expectation harness | **#11** fire-drill orchestration via `verify --all` |
+| 4 | scenario expectation harness + offline test suite | **#11** fire-drill orchestration via `verify --all` |
 
 Neither plane waits on the other: every phase moves both.
 
@@ -131,7 +131,7 @@ that leave every assertion green.*
 | `volume_collapse` | `VolumeAnomalyDetector` — row counts vs baseline | **repaired** (pin) |
 | `model_drift` | `ModelDriftDetector` — scoring snapshot vs baseline through `ml/drift.py` | **repaired** (repoint) |
 | `training_serving_skew` | `TrainingServingSkewDetector` — serving means vs the champion's `train_mean_*` | **contained** |
-| `label_leakage` | `LabelLeakageDetector` — `roc_auc` **above** a ceiling | **repaired** + code fix |
+| `label_leakage` | `LabelLeakageDetector` — `roc_auc` **above** a ceiling | **contained** + code fix |
 | `duplicate_batch` | reuses `DataHubAssertionDetector` | **repaired** (dedupe) |
 
 **Three of these leave all 22 dbt assertions passing.** That is the point: a
@@ -188,6 +188,80 @@ prose — the tool list lives inside `instructions` instead.
 - The shadow model comparison failed on incomplete rows — meaning the preview was
   unavailable during exactly the incidents where a rollback gets proposed. It now
   scores the rows it can.
+
+### Phase 4 — what landed
+
+*Making the claims re-checkable. Two layers, because they answer different
+questions.*
+
+**`tests/` — 101 tests, offline.** No Docker, no DataHub, no MLflow, no API key;
+builds its own throwaway DuckDB so the suite can never disturb the pipeline you
+are demoing with. It covers what the agent decides *before* any LLM runs — the
+anomaly classifier and its boundaries, leak identification, the planner's recipe
+table, the autonomy tiers, journal round-trips and selective rollback, snapshot
+restore verified by content fingerprint, drift maths, the savings digest, trust
+scoring, and runbook rendering.
+
+Three of them are contract-parity checks, and they exist because each guards a
+failure mode that is silent rather than loud:
+
+| Check | What it prevents |
+|---|---|
+| every `ChangeType` has a planner recipe | a missing entry becomes the do-nothing fallback — how five incident classes would have gone unremediated |
+| every `SignalType` maps to a change type (bar the two left to the profiler) | a detected incident classified `unknown` and never acted on |
+| every `ActionType` has a registered actuator | a planned action that silently fails at execution |
+
+**`python -m scenarios verify` — the live matrix.** Each scenario already
+declared what it expects the agent to do; this runs the real loop and grades it.
+`--plan-only` covers detection, RCA and planning without mutating anything and is
+the one to run habitually; full mode also runs the remediation and checks where
+the gate ends up.
+
+**The first run scored 10/12, and both failures were real defects** — which is
+the outcome that justified building it:
+
+- **The distribution trip-wire was invisible to the agent.**
+  `assert_amount_distribution_stable` referenced its model by bare table name
+  instead of `{{ ref() }}`, so dbt recorded no dependency, DataHub attached the
+  assertion to no dataset, and the agent — which finds incidents by asking each
+  dataset for its failing assertions — could never see it. The check that exists
+  specifically to catch subtle drift had never raised an incident.
+  `distribution_drift` only appeared to work because `unit_bug` trips a second,
+  properly-attached assertion.
+- **The autonomy tier was nondeterministic.** A volume collapse is 3218 rows
+  against a baseline of 8000 — arithmetic, not a judgement — but RCA took its
+  confidence from the LLM's narrative, which called it "medium". On a PII asset
+  anything below high drops to `HUMAN_ONLY` and withholds every data change, so
+  the same incident repaired itself on one run and merely contained itself on the
+  next. Confidence now belongs to whatever produced the classification: measured
+  means high, and the model sets it only when the model also did the classifying.
+
+Both are guarded by `tests/test_regressions.py`, including a parametrised check
+that every singular dbt test uses `ref()` and a manifest check that no assertion
+is orphaned. Neither bug was visible to review.
+
+**Full mode then found a third**, in the check plan-only skips. `label_leakage`
+was planned as `pause_job → repoint_model`, and the repoint looked right — the
+shadow preview even showed the older model flagging 0.81% of transactions versus
+the leaked one's 3.2%. But the gate then failed on training/serving skew, because
+every earlier version was fitted to a distribution the leaked feature no longer
+matches, and the rollback duly withdrew the repoint — **restoring the leaked
+champion**. The attempt achieved nothing and undid itself.
+
+Leakage is now containment-only: stop serving, warn downstream, and let
+`propose_fix` produce the diff that removes the leaking feature, which is the
+only thing that actually resolves it. The end state is the same one the rollback
+path reached, minus the churn and minus reinstating a model known to be
+compromised.
+
+**One honest caveat on that.** Containment is deterministic and always happens —
+the breaker, the tags, the escalation. The *diff* is not: it needs the LLM, and
+on the free-tier model configured here roughly one call in three comes back
+empty. A verification run caught exactly that, degrading to the deterministic RCA
+narrative and no fix. That is the designed fallback rather than a defect, but it
+means "contained + code fix" describes the good path, not a guarantee. The diff
+itself is real when it lands — `examples/generated_fixes/LEAK-v5.diff` removes
+`amount` from `FEATURES`.
 
 ---
 
@@ -289,7 +363,7 @@ Builds entirely against `fakes.py` until Srinjoy's real tools land — no blocki
 | 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | **3** | ✅ `python -m agent --shadow` / `digest` |
 | 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | **3** | ✅ `python -m agent badges` |
 | 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Skill registration | **3** | ✅ registered as a real `AgentSkill` entity |
-| 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ✅ `python -m agent drill <scenario>`; matrix in Phase 4 |
+| 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ✅ `python -m agent drill <scenario>` + `scenarios verify --all` |
 | — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | **0 + 2** | 🔨 enum-parity fix landed Phase 0; signal→change-type map in Phase 2 |
 | 6 | **Audience-Aware Comms** — one incident → 3 tailored messages | `ContextBundle.owners`, `tags` | **not scheduled** | ⬜ unblocked, not built |
 | 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage | `ContextBundle.downstream` + usage stats | **not scheduled** | ⬜ unblocked, not built |

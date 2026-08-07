@@ -49,12 +49,34 @@ MAX_HISTORY_PENALTY = 20.0
 
 
 @dataclass
-class _Signals:
+class HealthSignals:
+    """What the score is computed from. Gathering these needs DataHub and the
+    warehouse; turning them into a number does not, which is why the two are
+    separate — the arithmetic is the part worth testing."""
     failed_assertions: int = 0
     degraded: bool = False
     volume_shift: float = 0.0
     freshness_lag_hours: float = 0.0
     past_incidents: int = 0
+
+
+def score_from_signals(signals: HealthSignals) -> float:
+    """Signals to a 0-100 score.
+
+    Failing assertions are capped at two: past a point the asset is simply
+    broken, and letting a long list drive the score to zero would say nothing
+    more than a short one does. Incident history is capped for the opposite
+    reason — an asset that has had problems before should look worse, but never
+    so much worse that a currently-healthy table can't recover its grade.
+    """
+    penalty = 0.0
+    penalty += PENALTY_FAILED_ASSERTION * min(signals.failed_assertions, 2)
+    penalty += PENALTY_OPEN_INCIDENT if signals.degraded else 0.0
+    penalty += PENALTY_VOLUME if abs(signals.volume_shift) >= 0.25 else 0.0
+    penalty += PENALTY_FRESHNESS if signals.freshness_lag_hours > 24 else 0.0
+    penalty += min(PENALTY_PER_PAST_INCIDENT * signals.past_incidents,
+                   MAX_HISTORY_PENALTY)
+    return max(0.0, 100.0 - penalty)
 
 
 class TrustScorer:
@@ -66,16 +88,7 @@ class TrustScorer:
     # ------------------------------------------------------------------ #
     def score(self, asset_urn: str, table: str | None = None) -> TrustScore:
         signals = self._gather(asset_urn, table)
-
-        penalty = 0.0
-        penalty += PENALTY_FAILED_ASSERTION * min(signals.failed_assertions, 2)
-        penalty += PENALTY_OPEN_INCIDENT if signals.degraded else 0.0
-        penalty += PENALTY_VOLUME if abs(signals.volume_shift) >= 0.25 else 0.0
-        penalty += PENALTY_FRESHNESS if signals.freshness_lag_hours > 24 else 0.0
-        penalty += min(PENALTY_PER_PAST_INCIDENT * signals.past_incidents,
-                       MAX_HISTORY_PENALTY)
-
-        value = max(0.0, 100.0 - penalty)
+        value = score_from_signals(signals)
         return TrustScore(
             asset_urn=asset_urn,
             score=round(value, 1),
@@ -119,11 +132,11 @@ class TrustScorer:
         return score
 
     # ------------------------------------------------------------------ #
-    def _gather(self, asset_urn: str, table: str | None) -> _Signals:
+    def _gather(self, asset_urn: str, table: str | None) -> HealthSignals:
         from agent.tools.actuators.tag_asset import DEGRADED_TAG
         from agent.tools.graph.urns import table_of
 
-        signals = _Signals()
+        signals = HealthSignals()
         table = table or table_of(asset_urn)
 
         # The loudest signal there is: this asset's own tests are failing right

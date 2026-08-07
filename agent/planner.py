@@ -45,7 +45,14 @@ RECIPES: dict[ChangeType, list[ActionType]] = {
     ChangeType.FRESHNESS_LAG:     [ActionType.TAG_ASSET, ActionType.PAUSE_JOB],
     ChangeType.TRAINING_SERVING_SKEW: [ActionType.TAG_ASSET, ActionType.PAUSE_JOB],
     ChangeType.TRAINING_REGRESSION: [ActionType.REPOINT_MODEL],
-    ChangeType.LABEL_LEAKAGE:     [ActionType.PAUSE_JOB, ActionType.REPOINT_MODEL],
+    # Leakage lives in the data, not in the model, so no pointer change can fix
+    # it: every earlier version was fitted to a distribution the leaked features
+    # no longer match, so the gate stays red and the rollback puts the leaked
+    # champion straight back. Attempting it achieved nothing and undid itself.
+    # Contain instead — stop serving, warn downstream — and let propose_fix
+    # produce the diff that removes the leaking feature, which is the only thing
+    # that actually resolves this.
+    ChangeType.LABEL_LEAKAGE:     [ActionType.PAUSE_JOB, ActionType.TAG_ASSET],
     # Code and dependency breaks are fixed by a pull request, not by moving data.
     ChangeType.DEPENDENCY_CHANGE: [],
     ChangeType.CODE_CHANGE:       [],

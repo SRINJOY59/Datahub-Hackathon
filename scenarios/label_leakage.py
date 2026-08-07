@@ -33,12 +33,14 @@ class LabelLeakageScenario(DataScenario):
         change_type="label_leakage",
         root_table="training_dataset",
         root_column="amount",
-        actions=["pause_job", "repoint_model"],
-        checks_pass_after_act=True,
+        actions=["pause_job", "tag_asset"],
+        checks_pass_after_act=False,   # contained: the leak is in the data
         trips_dbt_tests=False,
-        note="The mirror of a regression: the metric goes UP. Remediation stops "
-             "serving, rolls back to the last honest model, and proposes removing "
-             "the leaking feature.",
+        note="The mirror of a regression: the metric goes UP. Nothing the agent "
+             "can do resolves this — every earlier model was fitted to a "
+             "distribution the leaked feature no longer matches — so it stops "
+             "serving, warns downstream, and proposes the diff that removes the "
+             "feature. Repairing it needs a code change and a retrain.",
     )
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:

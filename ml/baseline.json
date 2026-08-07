@@ -1,5 +1,5 @@
 {
-  "scored_at": "2026-08-07T13:28:01.198503+00:00",
+  "scored_at": "2026-08-07T18:51:46.163294+00:00",
   "model": "fraud_detection_model@champion",
   "n_scored": 8000,
   "positive_pred_rate": 0.007875,
