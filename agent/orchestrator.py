@@ -52,12 +52,17 @@ class SentinelAgent:
         memory: Optional[MemoryStore] = None,
         policy: Optional[AutonomyPolicy] = None,
         planner: Optional[RemediationPlanner] = None,
+        shadow: bool = False,
     ) -> None:
         self.m = mechanisms
         self.memory = memory
         self.rca = RCAEngine(llm=llm, memory=memory)
         self.policy = policy or AutonomyPolicy()
         self.planner = planner or RemediationPlanner(self.policy)
+        # Shadow mode: reason all the way to a plan, record it, change nothing.
+        # This is how a team decides whether to trust the agent before granting
+        # it the ability to act.
+        self.shadow = shadow
 
     # --- THE LOOP ---------------------------------------------------------- #
     def handle(self, inc: Incident, seen_roots: Optional[dict] = None) -> None:
@@ -109,6 +114,10 @@ class SentinelAgent:
             self._escalate(inc, ctx, rca, tier, reason="nothing the agent may do")
             return
 
+        if self.shadow:
+            self._simulate(inc, actions)
+            return
+
         journal = self._apply(actions)
         applied = [a for a in journal if a.status == "applied"]
         failed = [a for a in journal if a.status == "failed"]
@@ -137,6 +146,23 @@ class SentinelAgent:
             self._roll_back(inc, ctx, rca, tier, applied, result.failures)
 
     # --- outcomes ------------------------------------------------------ #
+    def _simulate(self, inc: Incident, actions: list[ActionRecord]) -> None:
+        """Record the plan without executing any of it.
+
+        The incident is left open on purpose: shadow mode is an argument about
+        what the agent would have done, and closing incidents it never touched
+        would make that argument dishonest.
+        """
+        journal = getattr(self.m, "journal", None)
+        for a in actions:
+            a.incident_id = inc.id
+            if journal is not None:
+                journal.record_simulated(a, inc.id)
+            log("shadow", f"would {a.action_type.value} -> {_short(a.target)}"
+                          + (f"  ({a.note})" if a.note else ""))
+        log("shadow", f"{len(actions)} action(s) recorded, none applied — "
+                      f"incident left open")
+
     def _apply(self, actions: list[ActionRecord]) -> list[ActionRecord]:
         journal: list[ActionRecord] = []
         for a in actions:

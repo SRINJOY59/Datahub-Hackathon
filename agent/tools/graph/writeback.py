@@ -62,6 +62,9 @@ class DataHubWriteBack:
         if resolved:
             self._clear_degraded(pm, context)
             self._stamp_resolved(pm.asset_urn)
+        # Refresh the health grade either way: an incident that was only contained
+        # is exactly the situation where a reader most needs to see a low score.
+        self._rescore(pm, context)
 
     # ------------------------------------------------------------------ #
     def _record(self, pm: PostMortem) -> None:
@@ -99,6 +102,22 @@ class DataHubWriteBack:
                 self._remove_tag(urn, DEGRADED_TAG)
             except Exception:
                 continue  # one unreachable asset must not block the rest
+
+    def _rescore(self, pm: PostMortem, context: ContextBundle | None) -> None:
+        """Recompute the trust badge on the affected assets."""
+        try:
+            from agent.tools.graph.trust import TrustScorer
+            from agent.tools.graph.urns import is_dataset
+
+            scorer = TrustScorer(self.gms_server)
+            targets = {pm.asset_urn}
+            if context:
+                targets.update(n.urn for n in context.downstream)
+            for urn in targets:
+                if is_dataset(urn):
+                    scorer.score_and_publish(urn)
+        except Exception:
+            pass  # a missing badge must never block closing an incident
 
     def _stamp_resolved(self, urn: str) -> None:
         try:

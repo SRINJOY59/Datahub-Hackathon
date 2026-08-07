@@ -72,6 +72,18 @@ class CodeFixTool:
         if fixed is None or fixed.strip() == original.strip():
             return NO_FIX_GENERATED
 
+        # Check the proposal in a place it cannot hurt anything before putting it
+        # in front of a human. A confidently-worded fix that does not parse is
+        # worse than no fix, because someone has to read it to find that out.
+        if request.file.endswith(".py"):
+            from agent.tools.warehouse.shadow import ShadowEnvironment
+
+            verdict = ShadowEnvironment.verify_python(request.file, fixed)
+            if not verdict.passed:
+                return f"{NO_FIX_GENERATED}: {'; '.join(verdict.failures)}"
+            request.detail = (request.detail + f"\n\nShadow check: {verdict.note}"
+                              ).strip()
+
         diff = "".join(difflib.unified_diff(
             original.splitlines(keepends=True),
             fixed.splitlines(keepends=True),

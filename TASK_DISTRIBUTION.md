@@ -30,7 +30,7 @@ is signed off.
 | **0** | Structural repairs + foundation modules (behaviour-neutral) | ✅ |
 | **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
 | **2** | Six new threat classes (detectors, probes, scenarios) | ✅ |
-| **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ⬜ |
+| **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ✅ |
 | **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ⬜ |
 | **5** | *(optional)* Intelligence-plane remainder: #6 Comms, #7 Cost Meter, #12 Ask-the-On-Call, git-commit detector | not scheduled |
 
@@ -160,6 +160,35 @@ incident is how people learn to ignore breakers.
 | `_readable` on the DataHub assertion path | incidents read `1 failed assertion: a321883ce7` |
 | champion restore uses the healthy band | `reset` would have reinstated the **leaked** 0.998 model, since every trained version is tagged validated |
 
+### Phase 3 — what landed
+
+*The last six features. Both planes are now complete except the three
+Intelligence items deliberately left out of scope.*
+
+| # | Feature | How it works |
+|---|---|---|
+| **2** | Drift Attribution | `GitBlameProbe` reads `CodebaseMemory`'s producer map **backwards** — the index that maps a source file to the asset it produces already existed for dependency tracing, so an asset resolves to a file and git resolves it to a commit. The RCA narrative now names the author and sha. |
+| **11** | Fire Drill | `inject_failure()` on the contract, driven by `python -m agent drill <scenario>`: break it, detect, root-cause, mitigate, validate. The pass condition is the scenario's own declared expectation, so a drill checks the agent noticed *the right thing*. |
+| **3** | Parallel Universe | `ShadowEnvironment` scores a candidate model version against today's data **without touching the champion alias**, and parses a generated fix before proposing it. The before/after appears inline in the action note and in the PR body. |
+| **8** | Shadow Mode + Digest | `python -m agent --shadow` reasons all the way to a plan and journals it as `simulated`, applying nothing; `python -m agent digest` aggregates the journal into incidents handled and hours saved. |
+| **9** | Trust Badges | `TrustScorer` writes a 0-100 score and an A–D grade onto each asset from failing assertions, open incidents, volume and freshness deviation, and incident history. Refreshed on every close — including a contained one, which is when a low grade matters most. |
+| **10** | Runbook → Skill | `RunbookSynthesizer` reads back the accumulated post-mortems, generalises the procedure that is already implicit in them, and registers it as a real DataHub **`AgentSkill`** entity with `name` / `description` / `instructions`. |
+
+**On #10:** the plan flagged Skill registration as an open question with a
+GlossaryTerm fallback. `AgentSkillInfoClass` turned out to exist in
+`acryl-datahub==1.7.0` with exactly the right shape, so no fallback was needed.
+One trap: `requiredTools` holds DataHub **urns** despite the name, and rejects
+prose — the tool list lives inside `instructions` instead.
+
+**Two bugs found by verification:**
+
+- `TrustScorer` never stored `gms_server`, so its failed-assertion lookup raised
+  `AttributeError` into a broad `except` and every asset scored as though its
+  tests passed. A **broken pipeline was being graded A.**
+- The shadow model comparison failed on incomplete rows — meaning the preview was
+  unavailable during exactly the incidents where a rollback gets proposed. It now
+  scores the rows it can.
+
 ---
 
 ## Shared foundation (done — Srinjoy)
@@ -203,10 +232,10 @@ plus the mechanism-side features.
 | `act()` / `undo()` | **#1 Time Machine** — 6 actuators, every one journaled with its inverse | **1** | ✅ |
 | `write_back()` | **#4 Circuit Breaker** — post-mortem to asset + model card, degraded tags auto-cleared | **1** | ✅ |
 | `propose_fix()` | **CodeFixTool** — LLM-generated migration diff + draft PR | pre-phase | ✅ |
-| `inject_failure()` | **#11 Fire Drill** — declared on the contract Phase 0 | **3** | ⬜ |
-| `shadow_validate()` | **#3 Parallel Universe** — declared on the contract Phase 0 | **3** | ⬜ |
+| `inject_failure()` | **#11 Fire Drill** — `python -m agent drill <scenario>` | **3** | ✅ |
+| `shadow_validate()` | **#3 Parallel Universe** — candidate scoring + fix syntax check | **3** | ✅ |
 
-**Contract coverage: 6/8 complete, 2 scheduled — 8/8 by end of Phase 3.**
+**Contract coverage: 8/8 complete.**
 
 **Verified against live DataHub, not asserted:** on a `unit_bug` incident the
 agent quarantined 1074 real rows, restored `raw_transactions` from 6926 back to
@@ -222,11 +251,11 @@ been real. On `training_regression` the champion alias moved v2 → v1.
 |---|---|---|---|
 | 1 | **Time Machine** — one-click reversible rollback (via `act`/`undo`) | **1** | ✅ |
 | 4 | **Smart Circuit Breaker** — tag/quarantine downstream + auto-restore | **1** | ✅ |
-| 2 | **Drift Attribution** — walk lineage upstream, correlate to the breaking commit | **3** | 🔨 `GitHistory` + inverse producer map landed Phase 0; probe in Phase 3 |
-| 3 | **Parallel Universe / Shadow Scoring** — apply fix in a clone, diff before/after as PR proof | **3** | ⬜ |
-| 11 | **Fire Drill** — `inject_failure()` mechanism | **3** | ⬜ |
+| 2 | **Drift Attribution** — walk lineage upstream, correlate to the breaking commit | **3** | ✅ |
+| 3 | **Parallel Universe / Shadow Scoring** — apply fix in a clone, diff before/after as PR proof | **3** | ✅ |
+| 11 | **Fire Drill** — `inject_failure()` mechanism | **3** | ✅ |
 
-**Mechanism-side features: 2/5 complete, 3 scheduled — 5/5 by end of Phase 3.**
+**Mechanism-side features: 5/5 complete.**
 
 Build order: `run_checks` → **Time Machine** → **Circuit Breaker** →
 **Drift Attribution** → Parallel Universe. All five are in the phase plan rather
@@ -257,17 +286,17 @@ Builds entirely against `fakes.py` until Srinjoy's real tools land — no blocki
 | # | Feature | What it needs from the contract | Phase | Status |
 |---|---|---|---|---|
 | 5 | **Organizational Memory** — post-mortems embedded on the model card; incident #2 resolves faster by citing #1 | `PostMortem` objects the loop emits | **1** | ✅ recall + precedent citation working; model-card write landed Phase 1 |
-| 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | **3** | ⬜ `ActionJournal.record_simulated()` is the hook (Phase 0) |
-| 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | **3** | ⬜ helper exists (Phase 1) |
-| 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Skill registration | **3** | ⬜ |
-| 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ⬜ `scenarios verify --all` is the orchestration |
+| 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | **3** | ✅ `python -m agent --shadow` / `digest` |
+| 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | **3** | ✅ `python -m agent badges` |
+| 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Skill registration | **3** | ✅ registered as a real `AgentSkill` entity |
+| 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ✅ `python -m agent drill <scenario>`; matrix in Phase 4 |
 | — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | **0 + 2** | 🔨 enum-parity fix landed Phase 0; signal→change-type map in Phase 2 |
 | 6 | **Audience-Aware Comms** — one incident → 3 tailored messages | `ContextBundle.owners`, `tags` | **not scheduled** | ⬜ unblocked, not built |
 | 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage | `ContextBundle.downstream` + usage stats | **not scheduled** | ⬜ unblocked, not built |
 | 12 | **Ask the On-Call** — chat over incident memory | Memory (#5) | **not scheduled** | ⬜ unblocked, not built |
 
-**Intelligence-plane coverage: 1/9 complete, 5 scheduled, 3 not scheduled —
-6/9 by end of Phase 4.**
+**Intelligence-plane coverage: 6/9 complete, 3 not scheduled** (#6, #7, #12 —
+see below).
 
 ### Not scheduled — and why
 
@@ -335,8 +364,9 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
   so any incident class can earn a code fix — a label leak produces a diff
   removing the leaking feature from `ml/config.py`. Still single-file; multi-file
   migrations, running the test suite on the fix, and org-wide scanning remain ⬜.
-- **Fix verification** ⬜ — apply the generated migration in a sandbox and run tests
-  before proposing (Parallel-Universe / shadow validation).
+- **Fix verification** 🔨 — a generated fix is parsed before it is proposed, and a
+  rollback target is scored before promotion. Running the full test suite on a
+  proposed fix is still ⬜.
 
 ## 2. Detection — more signal sources (Detector plugins)
 - ⭐ **Model-drift detector** ✅ — prediction-distribution shift from the scoring loop,
@@ -361,7 +391,8 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 ## 3. Investigation — more probes (Probe plugins)
 - **Schema-history / timeline probe** ⬜ — DataHub timeline API: exactly what changed
   and when (pin the change to a timestamp → correlate to a commit/deploy).
-- **Git-blame probe** ⬜ — the exact commit + author behind a change (Drift Attribution).
+- **Git-blame probe** ✅ — the exact commit + author behind a change; the RCA
+  narrative now names it.
 - **Training/serving-skew probe** ✅ — feature distributions at train vs serve time.
 - **Cross-incident correlation** 🔨 — basic same-root dedupe exists; add semantic
   clustering of simultaneous incidents to one root cause.
@@ -371,8 +402,8 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 ## 4. Memory & knowledge (the compounding moat)
 - **Vector memory** ⬜ — embeddings for semantic recall of similar past incidents
   (today: same-asset + same-change-type filter).
-- **Runbook → DataHub Skill** ⬜ — synthesize a runbook from repeated incidents and
-  register it as a Skill (also the OSS-contribution tiebreaker).
+- **Runbook → DataHub Skill** ✅ — synthesised from repeated post-mortems and
+  registered as a DataHub `AgentSkill` entity.
 - **CodebaseMemory → DataHub** ⬜ — ingest code files as assets so code↔data lineage
   lives in the graph, not just in-process.
 - **MTTR / learning analytics** ⬜ — track resolution time trending down as memory grows.
@@ -381,8 +412,8 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 - **Tiered autonomy** ✅ — tags, RCA confidence and blast radius decide the tier,
   and the tier genuinely gates what runs: protective actions at every tier,
   mutating actions withheld under `HUMAN_ONLY`.
-- ⭐ **Shadow mode + savings digest** ⬜ — propose-only mode with "would have resolved
-  N incidents, saved M hours" — the enterprise adoption on-ramp.
+- ⭐ **Shadow mode + savings digest** ✅ — `python -m agent --shadow` plans and
+  records without applying; `python -m agent digest` reports what it would have done.
 - **Human-in-the-loop approvals** ⬜ — approve/deny an action from Slack.
 - **Audit log** ✅ — `ActionJournal` writes every action + its inverse to
   `.sentinel/journal.jsonl`, append-only and replayable (Phase 0).
@@ -392,7 +423,8 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
   (engineer vs analyst vs exec), approve-from-chat.
 - ⭐ **Web dashboard** ⬜ — incident list, timeline, RCA, blast radius, MTTR.
 - **Cost-of-incident meter** ⬜ — $ impact from blast radius × usage.
-- **Trust badges / health scores** ⬜ — live reliability score written onto DataHub assets.
+- **Trust badges / health scores** ✅ — a 0-100 score and A–D grade written onto
+  each asset, refreshed whenever an incident closes.
 - **Ask-the-on-call** ⬜ — chat over incident memory.
 - **Paging** ⬜ — PagerDuty / Opsgenie for human-tier incidents.
 

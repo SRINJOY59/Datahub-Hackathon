@@ -46,11 +46,17 @@ class RepointModelActuator(BaseActuator):
         if target_version == current.version:
             raise RuntimeError(f"champion is already v{current.version}")
 
+        # Score the candidate before promoting it. Finding out how a rollback
+        # target behaves by pointing production at it and watching is not an
+        # experiment, and the before/after is what makes the action reviewable.
+        preview = self._preview(current.version, target_version)
+
         if not self.champion.set_alias(target_version):
             raise RuntimeError(f"could not move the alias to v{target_version}")
 
         action.note = (action.note + f" | champion v{current.version} -> "
-                                     f"v{target_version}").strip(" |")
+                                     f"v{target_version}"
+                       + (f" | shadow: {preview}" if preview else "")).strip(" |")
         return ActionRecord(
             action_type=self.action_type,
             target=action.target,
@@ -65,3 +71,16 @@ class RepointModelActuator(BaseActuator):
             return False
         inverse.applied_at = datetime.now(timezone.utc)
         return self.champion.set_alias(version)
+
+    @staticmethod
+    def _preview(current: str, candidate: str) -> str:
+        """A read-only comparison of the two versions on identical data. Never
+        allowed to block the rollback: if the preview cannot be produced, the
+        mitigation is still the right thing to do."""
+        try:
+            from agent.tools.warehouse.shadow import ShadowEnvironment
+
+            result = ShadowEnvironment().compare_versions(current, candidate)
+            return result.note if result.passed else ""
+        except Exception:
+            return ""

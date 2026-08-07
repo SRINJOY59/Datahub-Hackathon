@@ -18,15 +18,18 @@ mitigations it had not performed.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 from agent.contracts import (
     ActionRecord,
+    ActionType,
     ContextBundle,
     Incident,
     Mechanisms,
     MemoryStore,
     PostMortem,
+    ShadowResult,
     ValidationResult,
 )
 from agent.journal import ActionJournal
@@ -41,6 +44,8 @@ import agent.tools.actuators  # noqa: F401
 import agent.tools.checks  # noqa: F401
 import agent.tools.detectors  # noqa: F401
 import agent.tools.probes  # noqa: F401
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class RealMechanisms(Mechanisms):
@@ -173,6 +178,43 @@ class RealMechanisms(Mechanisms):
 
     def write_back(self, post_mortem: PostMortem, resolved: bool = True) -> None:
         self.writeback.write_back(post_mortem, self.last_context, resolved=resolved)
+
+    # --- fire drill & shadow validation --------------------------------- #
+    def inject_failure(self, scenario_name: str) -> Optional[Incident]:
+        """Break something on purpose and return the incident it produced.
+
+        The pass condition comes from the scenario's own declared expectation, so
+        a drill checks that the agent noticed *the right thing* rather than
+        merely noticing something.
+        """
+        from agent.tools.mechanisms.injector import FailureInjector, first_matching
+
+        injector = FailureInjector()
+        if not injector.inject(scenario_name):
+            return None
+        expected = injector.expected_signal(scenario_name)
+        return first_matching(self.detect_incidents(), expected)
+
+    def shadow_validate(self, incident: Incident, fix: str) -> ShadowResult:
+        """Evaluate a candidate somewhere it cannot affect production.
+
+        `fix` is either a model version to try, or a path to a generated file.
+        """
+        from agent.tools.warehouse.shadow import ShadowEnvironment
+
+        shadow = ShadowEnvironment()
+        if fix.endswith(".py"):
+            path = REPO_ROOT / fix
+            if not path.exists():
+                return ShadowResult(passed=False, checks_run=["syntax"],
+                                    failures=[f"{fix} does not exist"])
+            return shadow.verify_python(
+                fix, path.read_text(encoding="utf-8", errors="ignore"))
+
+        current = self.actuators.get(ActionType.REPOINT_MODEL)
+        current_version = (current.champion.current().version
+                           if current and current.champion.current() else "")
+        return shadow.compare_versions(current_version, fix)
 
 
 def _applies(check, asset_urn: str) -> bool:

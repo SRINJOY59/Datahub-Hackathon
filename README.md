@@ -264,11 +264,56 @@ version, so `python -m ml.train` is no longer needed to recover.
   fallback instead of the LLM narrative.
 - **Offline smoke test:** `python -m agent --fake` runs the full loop on canned
   data with no DataHub or LLM key.
-- **What's real:** detection, context, RCA, memory, fix generation **and the
-  mitigations**. The agent moves rows, restores tables, repoints the MLflow
-  champion, tags assets in DataHub and opens circuit breakers — all journaled
-  with a working inverse. Still stubbed: the fire drill and shadow validation
-  (`inject_failure`, `shadow_validate`). See `TASK_DISTRIBUTION.md`.
+- **What's real:** all of it. Detection, context, RCA, memory, fix generation and
+  the mitigations — the agent moves rows, restores tables, repoints the MLflow
+  champion, tags assets and opens circuit breakers, every action journaled with a
+  working inverse. See `TASK_DISTRIBUTION.md` for what is deliberately out of
+  scope.
+
+---
+
+## Other things it does
+
+```bash
+python -m agent drill <scenario>   # break it on purpose, then watch it heal
+python -m agent --shadow           # decide what to do, record it, change nothing
+python -m agent digest             # what it did, or would have done
+python -m agent badges             # health grade on every asset
+python -m agent runbooks           # write runbooks from what it has learned
+```
+
+**Fire drill.** An agent nobody has seen fail is an agent nobody should trust, so
+this is re-runnable on demand rather than demonstrated once: inject a real
+failure, detect it, root-cause it, fix it, verify. The pass condition is the
+scenario's own declared expectation, so a drill checks the agent noticed *the
+right thing* rather than merely noticing something.
+
+**Shadow mode** is the on-ramp. The agent reasons all the way to a plan and
+records it, applies nothing, and leaves the incident open — then `digest` tells
+you what it would have done. Run it for a week before you let it act.
+
+**Trust badges** put a 0-100 score and an A–D grade on each asset in DataHub,
+computed from failing assertions, open incidents, and deviation from the recorded
+baseline. The inputs are published next to the score, because a health grade
+nobody can explain is one nobody will act on. The grade refreshes whenever an
+incident closes — including a *contained* one, which is when a low grade matters
+most.
+
+**Runbooks.** Every resolved incident leaves a post-mortem. Once there are
+several of the same kind, `runbooks` reads them back and writes down the
+procedure already implicit in them, registering it as a DataHub **`AgentSkill`** —
+discoverable by the next person *and* the next agent, beside the assets it
+applies to.
+
+**Root cause names the commit.** The codebase index already maps each source file
+to the asset it produces. Read backwards, that turns "`raw_transactions.amount`
+shifted 100x" into "commit `b6a87ca` by SRINJOY59 changed the ingestion" — which
+is what someone actually needs in order to fix it.
+
+**Nothing is promoted untested.** A rollback target is scored against today's
+data before the champion alias moves, and a generated code fix is parsed before
+it is proposed. Neither touches production; both produce a before/after you can
+put in a PR.
 
 ---
 
@@ -326,7 +371,7 @@ to delete — you lose the rollback history, not the pipeline.
 |---|---|
 | `.sentinel/baselines.json` | the pipeline's healthy shape; how silent failures (stale feed, volume collapse) are detected at all |
 | `.sentinel/advisories/*.json` | published vendor advisories awaiting the dependency detector |
-| `.sentinel/journal.jsonl` | every action taken and the inverse that undoes it (audit log + rollback source) |
+| `.sentinel/journal.jsonl` | every action taken (or, in shadow mode, simulated) and the inverse that undoes it — audit log, rollback source, and digest input |
 | `.sentinel/breakers/*.json` | open circuit breakers; `ml/score.py` refuses to run while one exists |
 | `sentinel_snap` schema in `fraud.duckdb` | point-in-time table copies the Time Machine restores from |
 | `sentinel_quarantine` schema in `fraud.duckdb` | rows isolated from a bad batch, kept per incident for inspection |
@@ -411,6 +456,24 @@ python -m scenarios stale_feed
 python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('dbt green:', D().test().ok)"   # True
 python -m agent                                        # must say CONTAINED
 python -m ml.score                                     # must refuse: breaker open
+python -m scenarios reset
+```
+
+The whole loop in one command, repeatable any time:
+
+```bash
+python -m agent drill unit_bug        # inject -> detect -> RCA -> fix -> verify
+python -m agent digest                # what it just did, in hours
+python -m scenarios reset
+```
+
+Shadow mode must change nothing — check that it doesn't:
+
+```bash
+python -m scenarios null_spike
+python -m agent --shadow
+python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('still broken:', not D().test().ok)"
+ls .sentinel/breakers/ 2>/dev/null || echo "no breakers opened - correct"
 python -m scenarios reset
 ```
 

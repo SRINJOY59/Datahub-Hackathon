@@ -14,6 +14,7 @@ from agent.tools.probes import (  # noqa: F401
     dependency_impact_probe,
     duplicate_probe,
     freshness_probe,
+    git_blame_probe,
     leakage_probe,
     model_eval_probe,
     prediction_drift_probe,
