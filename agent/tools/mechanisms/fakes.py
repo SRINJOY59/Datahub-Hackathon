@@ -19,6 +19,7 @@ from agent.contracts import (
     PostMortem,
     SignalType,
     ValidationResult,
+    is_protective,
 )
 
 FEATURE_URN = "urn:li:dataset:(urn:li:dataPlatform:dbt,fraud_demo.fraud.main.feat_user_txn_stats,PROD)"
@@ -103,11 +104,21 @@ class FakeMechanisms(Mechanisms):
         action.status = "reverted"
         return True
 
-    def rollback(self, incident_id: str) -> tuple[int, int]:
-        """Mirror the real journal's contract: unwind in reverse order."""
+    def rollback(self, incident_id: str,
+                 mutating_only: bool = False) -> tuple[int, int]:
+        """Mirror the real journal's contract: unwind in reverse order, optionally
+        leaving protective actions in place."""
+        return self._undo_where(
+            lambda a: not (mutating_only and is_protective(a.action_type)))
+
+    def release_containment(self, incident_id: str) -> tuple[int, int]:
+        """Lift only the protective actions, once the incident is fixed."""
+        return self._undo_where(lambda a: is_protective(a.action_type))
+
+    def _undo_where(self, keep) -> tuple[int, int]:
         reverted = 0
         for action in reversed([a for a in self._applied if a.status == "applied"]):
-            if self.undo(action):
+            if keep(action) and self.undo(action):
                 reverted += 1
         return reverted, 0
 
@@ -115,6 +126,8 @@ class FakeMechanisms(Mechanisms):
                     root_cause: str) -> str:
         return "https://github.com/your-org/fraud-pipeline/pull/42"
 
-    def write_back(self, post_mortem: PostMortem) -> None:
-        print(f"    [fake write_back] post-mortem for {post_mortem.incident_id} "
-              f"-> DataHub ({len(post_mortem.blast_radius)} affected assets)")
+    def write_back(self, post_mortem: PostMortem, resolved: bool = True) -> None:
+        state = "resolved" if resolved else "contained"
+        print(f"    [fake write_back] {state} post-mortem for "
+              f"{post_mortem.incident_id} -> DataHub "
+              f"({len(post_mortem.blast_radius)} affected assets)")

@@ -31,6 +31,7 @@ from agent.contracts import (
     PostMortem,
     ShadowResult,
     ValidationResult,
+    is_protective,
 )
 from agent.journal import ActionJournal
 from agent.llm import LLMClient
@@ -149,11 +150,7 @@ class RealMechanisms(Mechanisms):
         place. A repair that failed validation is a reason to keep downstream
         consumers warned off, not to stop warning them.
         """
-        only = None
-        if mutating_only:
-            from agent.policy import AutonomyPolicy
-
-            only = lambda a: not AutonomyPolicy.is_protective(a.action_type)  # noqa: E731
+        only = (lambda a: not is_protective(a.action_type)) if mutating_only else None
         return self.journal.undo_all(incident_id, self.undo, only=only)
 
     def release_containment(self, incident_id: str) -> tuple[int, int]:
@@ -164,11 +161,9 @@ class RealMechanisms(Mechanisms):
         and a human clearing them by hand every time is how people learn to
         ignore the flags.
         """
-        from agent.policy import AutonomyPolicy
-
         return self.journal.undo_all(
             incident_id, self.undo,
-            only=lambda a: AutonomyPolicy.is_protective(a.action_type),
+            only=lambda a: is_protective(a.action_type),
         )
 
     # --- fix & close ---------------------------------------------------- #

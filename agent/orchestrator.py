@@ -27,14 +27,17 @@ from agent.contracts import (
     ChangeType,
     ContextBundle,
     Incident,
+    IncidentOutcome,
     Mechanisms,
     MemoryStore,
+    PostMortem,
     RootCauseAnalysis,
 )
 from agent.llm import LLMClient
 from agent.planner import RemediationPlanner
 from agent.policy import AutonomyPolicy
 from agent.rca import RCAEngine
+from agent.tools.graph.urns import short_name
 
 # Incidents whose fix is a code change, not a data or model action.
 _CODE_CHANGES = (ChangeType.DEPENDENCY_CHANGE, ChangeType.CODE_CHANGE)
@@ -65,7 +68,8 @@ class SentinelAgent:
         self.shadow = shadow
 
     # --- THE LOOP ---------------------------------------------------------- #
-    def handle(self, inc: Incident, seen_roots: Optional[dict] = None) -> None:
+    def handle(self, inc: Incident,
+               seen_roots: Optional[dict] = None) -> IncidentOutcome:
         seen_roots = seen_roots if seen_roots is not None else {}
         print(f"\n=== Incident {inc.id}: {inc.summary} ===")
 
@@ -82,28 +86,28 @@ class SentinelAgent:
         if root_key in seen_roots:
             log("correlate", f"same root cause as {seen_roots[root_key]} — "
                              f"skipping duplicate mitigation")
-            return
+            return self._outcome(inc, rca, "correlated", resolved=False, actions=[])
         seen_roots[root_key] = inc.id
 
         tier = self.policy.tier(ctx, rca)
         log("policy", f"tier={tier.value} ({self.policy.explain(tier, ctx, rca)})")
 
         if rca.change_type in _CODE_CHANGES:
-            self._remediate_code(inc, ctx, rca)
-            return
-
-        self._remediate_data(inc, ctx, rca, tier)
+            return self._remediate_code(inc, ctx, rca)
+        return self._remediate_data(inc, ctx, rca, tier)
 
     # --- remediation paths -------------------------------------------- #
-    def _remediate_code(self, inc, ctx, rca) -> None:
+    def _remediate_code(self, inc, ctx, rca) -> IncidentOutcome:
         """A dependency or API break is fixed by changing code, so the
         remediation is a pull request rather than a data action."""
         pr = self.m.propose_fix(inc, ctx, rca.narrative)
         log("fix", f"generated migration -> {pr}")
         self._resolve(inc, ctx, rca, actions_taken=["propose_fix"],
                       resolution=f"auto-migration: {pr}")
+        return self._outcome(inc, rca, "code_fix", resolved=True,
+                             actions=["propose_fix"], pr=pr)
 
-    def _remediate_data(self, inc, ctx, rca, tier: AutonomyTier) -> None:
+    def _remediate_data(self, inc, ctx, rca, tier: AutonomyTier) -> IncidentOutcome:
         actions, withheld = self.planner.plan(rca, ctx, tier)
         for a in withheld:
             log("withheld", f"{a.action_type.value} on {_short(a.target)} — "
@@ -112,11 +116,12 @@ class SentinelAgent:
         if not actions:
             log("plan", "no autonomous action available for this incident")
             self._escalate(inc, ctx, rca, tier, reason="nothing the agent may do")
-            return
+            return self._outcome(inc, rca, "escalated", resolved=False, actions=[])
 
         if self.shadow:
             self._simulate(inc, actions)
-            return
+            return self._outcome(inc, rca, "shadow", resolved=False,
+                                 actions=[a.action_type.value for a in actions])
 
         journal = self._apply(actions)
         applied = [a for a in journal if a.status == "applied"]
@@ -131,19 +136,36 @@ class SentinelAgent:
                         + ("" if result.passed else f", failures: {result.failures}")
                         + ")")
 
+        applied_types = [a.action_type.value for a in applied]
         if result.passed and applied:
             self._succeed(inc, ctx, rca, tier, applied)
+            return self._outcome(inc, rca, "resolved", resolved=True,
+                                 actions=applied_types)
         elif result.passed and not applied:
             # Nothing we did took effect, so a green gate is not our success.
             log("validate", "gate is green but no action applied — not claiming "
                             "credit for it")
             self._escalate(inc, ctx, rca, tier, reason="all actions failed")
+            return self._outcome(inc, rca, "escalated", resolved=False, actions=[])
         elif self.policy.is_containment_only(applied):
             # Nothing in the plan could have repaired this, so a red gate is the
             # expected outcome rather than a failed mitigation.
             self._contain(inc, ctx, rca, tier, applied, result.failures)
+            return self._outcome(inc, rca, "contained", resolved=False,
+                                 actions=applied_types)
         else:
             self._roll_back(inc, ctx, rca, tier, applied, result.failures)
+            return self._outcome(inc, rca, "rolled_back", resolved=False,
+                                 actions=applied_types)
+
+    @staticmethod
+    def _outcome(inc, rca, status: str, resolved: bool,
+                 actions: list[str], pr=None) -> IncidentOutcome:
+        return IncidentOutcome(
+            incident_id=inc.id, status=status, resolved=resolved,
+            change_type=rca.change_type, root_cause_asset=rca.root_cause_asset,
+            root_cause_column=rca.root_cause_column, actions_taken=actions, pr=pr,
+        )
 
     # --- outcomes ------------------------------------------------------ #
     def _simulate(self, inc: Incident, actions: list[ActionRecord]) -> None:
@@ -181,7 +203,7 @@ class SentinelAgent:
         # The pipeline is healthy again, so the warnings have to come down with
         # it: a breaker left open after the fix keeps the scoring job down for no
         # reason, and flags that outlive their incident stop being read.
-        released, failed = self._release_containment(inc.id)
+        released, failed = self.m.release_containment(inc.id)
         if released:
             log("restore", f"lifted {released} protective measure(s) — breaker "
                            f"closed, downstream flags cleared"
@@ -231,7 +253,7 @@ class SentinelAgent:
         )
 
     def _roll_back(self, inc, ctx, rca, tier, applied, failures) -> None:
-        reverted, failed = self._rollback(inc.id, mutating_only=True)
+        reverted, failed = self.m.rollback(inc.id, mutating_only=True)
         held = [a for a in applied if self.policy.is_protective(a.action_type)]
         log("rollback", f"validation failed — withdrew {reverted} data action(s)"
                         + (f", {failed} could not be reverted" if failed else ""))
@@ -241,26 +263,6 @@ class SentinelAgent:
         self._escalate(inc, ctx, rca, tier,
                        reason=f"validation still failing: {failures}")
 
-    def _release_containment(self, incident_id: str) -> tuple[int, int]:
-        release = getattr(self.m, "release_containment", None)
-        if release is None:
-            return 0, 0
-        try:
-            return release(incident_id)
-        except Exception:
-            return 0, 0
-
-    def _rollback(self, incident_id: str,
-                  mutating_only: bool = False) -> tuple[int, int]:
-        rollback = getattr(self.m, "rollback", None)
-        if rollback is None:
-            return 0, 0
-        try:
-            return rollback(incident_id, mutating_only=mutating_only)
-        except TypeError:
-            # a Mechanisms implementation with the older single-argument rollback
-            return rollback(incident_id)
-
     def _escalate(self, inc, ctx, rca, tier, reason: str) -> None:
         log("escalate", f"paging {ctx.owners or ['(no owner on the asset)']} — {reason}")
         if self.policy.needs_human(tier):
@@ -268,8 +270,6 @@ class SentinelAgent:
 
     def _resolve(self, inc, ctx, rca, actions_taken: list[str],
                  resolution: str, resolved: bool = True) -> None:
-        from agent.contracts import PostMortem
-
         pm = PostMortem(
             incident_id=inc.id,
             asset_urn=inc.asset_urn,
@@ -279,20 +279,13 @@ class SentinelAgent:
             resolution=resolution,
             resolved_at=datetime.now(timezone.utc),
         )
-        self._write_back(pm, resolved)
+        self.m.write_back(pm, resolved=resolved)
         if resolved:
             log("resolve", "incident resolved; post-mortem written to the graph "
                            "(asset + model card), degraded tags cleared")
         else:
             log("resolve", "incident CONTAINED, not resolved; post-mortem written "
                            "to the graph, degraded tags left in place")
-
-    def _write_back(self, pm, resolved: bool) -> None:
-        try:
-            self.m.write_back(pm, resolved=resolved)
-        except TypeError:
-            # a Mechanisms implementation predating the contained/resolved split
-            self.m.write_back(pm)
 
     # --- reporting ----------------------------------------------------- #
     @staticmethod
@@ -305,19 +298,22 @@ class SentinelAgent:
                           f"{rca.precedents}")
         log("blast", f"{len(rca.blast_radius)} affected: {rca.blast_radius}")
 
-    def run(self) -> None:
+    def run(self) -> list[IncidentOutcome]:
         incidents = self.m.detect_incidents()
         log("detect", f"{len(incidents)} open incident(s)")
         seen_roots: dict = {}  # shared across incidents to correlate root causes
-        for inc in incidents:
-            self.handle(inc, seen_roots)
-        print("\n=== loop complete ===")
+        outcomes = [self.handle(inc, seen_roots) for inc in incidents]
+        if outcomes:
+            resolved = sum(1 for o in outcomes if o.resolved)
+            print(f"\n=== loop complete — {resolved}/{len(outcomes)} resolved, "
+                  f"{len(outcomes) - resolved} contained/escalated ===")
+        else:
+            print("\n=== loop complete ===")
+        return outcomes
 
 
 def _short(urn: str) -> str:
     """A readable tail for log lines."""
-    from agent.tools.graph.urns import short_name
-
     return short_name(urn) or urn
 
 

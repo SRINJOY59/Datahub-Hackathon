@@ -173,7 +173,12 @@ class CodeFixTool:
                 head=branch, base=base, draft=True,
             )
             return pr.html_url
-        except Exception:
+        except Exception as e:
+            # A token was configured, so silently writing a diff would let a
+            # failed PR look like the intended outcome. Surface why it failed and
+            # fall back to the diff, rather than pretending a PR was never wanted.
+            print(f"  [fix      ] PR creation failed for {self.repo}: "
+                  f"{type(e).__name__}: {e} — falling back to a local diff")
             return None
 
 

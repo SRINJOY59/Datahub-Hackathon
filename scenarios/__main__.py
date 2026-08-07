@@ -1,15 +1,18 @@
-"""Run an incident scenario, capture a baseline, or reset the pipeline.
+"""Run an incident scenario, capture a baseline, reset, or verify the agent.
 
     python -m scenarios list                 # list available scenarios
     python -m scenarios unit_bug             # inject the unit-bug incident
     python -m scenarios reset                # restore a clean, healthy pipeline
     python -m scenarios snapshot             # capture the last-known-good state
+    python -m scenarios verify [name ...]    # run scenario(s) through the agent
+                                             #   and check the declared Expectation
 
     add --no-reingest to skip the DataHub refresh (faster local iteration)
 """
 from __future__ import annotations
 
 import argparse
+import sys
 
 from scenarios import registry
 from scenarios.base import PipelineReset, capture_last_good
@@ -24,7 +27,9 @@ def main() -> None:
         pass
 
     ap = argparse.ArgumentParser(prog="scenarios")
-    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', or 'list'")
+    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', "
+                                    "'verify', or 'list'")
+    ap.add_argument("names", nargs="*", help="scenario names (for 'verify')")
     ap.add_argument("--no-reingest", action="store_true")
     args = ap.parse_args()
 
@@ -41,11 +46,16 @@ def main() -> None:
     if args.action == "snapshot":
         capture_last_good()
         return
+    if args.action == "verify":
+        from scenarios.verify import main as verify_main
+
+        sys.exit(verify_main(args.names or None))
 
     cls = registry.get(args.action)
     if cls is None:
         raise SystemExit(f"unknown scenario '{args.action}'. "
-                         f"Options: {', '.join(registry.names())}, reset, snapshot, list")
+                         f"Options: {', '.join(registry.names())}, reset, snapshot, "
+                         f"verify, list")
 
     cls().apply(reingest_after=reingest_after)
 
