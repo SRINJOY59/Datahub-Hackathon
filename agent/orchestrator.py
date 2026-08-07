@@ -37,6 +37,7 @@ from agent.llm import LLMClient
 from agent.planner import RemediationPlanner
 from agent.policy import AutonomyPolicy
 from agent.rca import RCAEngine
+from agent.reporting.cost import CostEstimator
 from agent.tools.graph.urns import short_name
 
 # Incidents whose fix is a code change, not a data or model action.
@@ -270,6 +271,10 @@ class SentinelAgent:
 
     def _resolve(self, inc, ctx, rca, actions_taken: list[str],
                  resolution: str, resolved: bool = True) -> None:
+        cost = CostEstimator().estimate(ctx, rca.change_type.value)
+        verb = "avoided" if resolved else "at risk (unresolved)"
+        log("cost", f"est. exposure {verb}: ${cost.dollars:,.0f} — {cost.basis}")
+
         pm = PostMortem(
             incident_id=inc.id,
             asset_urn=inc.asset_urn,
@@ -278,6 +283,8 @@ class SentinelAgent:
             actions_taken=actions_taken,
             resolution=resolution,
             resolved_at=datetime.now(timezone.utc),
+            estimated_impact_usd=cost.dollars,
+            impact_basis=cost.basis,
         )
         self.m.write_back(pm, resolved=resolved)
         if resolved:

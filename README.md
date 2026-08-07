@@ -297,7 +297,18 @@ computed from failing assertions, open incidents, and deviation from the recorde
 baseline. The inputs are published next to the score, because a health grade
 nobody can explain is one nobody will act on. The grade refreshes whenever an
 incident closes — including a *contained* one, which is when a low grade matters
-most.
+most. The score and its arithmetic are written into the asset's editable
+description (the catalog "About" box), so a human browsing the table sees the same
+health the agent does.
+
+**Incident cost.** Each resolved incident carries an estimated business exposure,
+shown in the badge and the agent log. Sentinel does not invent the figure: it
+measures the real downstream blast radius from the lineage graph and applies the
+rates in **`config/cost_model.yaml`** — which are *yours* to set (per-consumer
+rates, assumed MTTR, per-change-type severity). Every estimate cites its
+assumptions, flags when it fell back to illustrative defaults, and produces no
+dollar figure at all when you set `enabled: false`. The number is only ever as
+good as your config, so it always shows its work.
 
 **Runbooks.** Every resolved incident leaves a post-mortem. Once there are
 several of the same kind, `runbooks` reads them back and writes down the

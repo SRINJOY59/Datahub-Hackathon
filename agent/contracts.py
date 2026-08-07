@@ -190,6 +190,16 @@ class RootCauseAnalysis:
 
 
 @dataclass
+class CostEstimate:
+    """The business exposure an incident would have caused unremediated — a
+    transparent, tunable order-of-magnitude, not a precise figure."""
+    dollars: float
+    hours_at_risk: float
+    breakdown: dict = field(default_factory=dict)
+    basis: str = ""            # human-readable arithmetic behind the number
+
+
+@dataclass
 class PostMortem:
     incident_id: str
     asset_urn: str
@@ -198,6 +208,8 @@ class PostMortem:
     actions_taken: list[str] = field(default_factory=list)
     resolution: str = ""
     resolved_at: Optional[datetime] = None
+    estimated_impact_usd: float = 0.0   # exposure avoided, for the trust badge
+    impact_basis: str = ""              # how that figure was reached
 
 
 @dataclass
