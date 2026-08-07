@@ -129,8 +129,12 @@ class SentinelAgent:
             log("validate", "gate is green but no action applied — not claiming "
                             "credit for it")
             self._escalate(inc, ctx, rca, tier, reason="all actions failed")
+        elif self.policy.is_containment_only(applied):
+            # Nothing in the plan could have repaired this, so a red gate is the
+            # expected outcome rather than a failed mitigation.
+            self._contain(inc, ctx, rca, tier, applied, result.failures)
         else:
-            self._roll_back(inc, ctx, rca, tier, result.failures)
+            self._roll_back(inc, ctx, rca, tier, applied, result.failures)
 
     # --- outcomes ------------------------------------------------------ #
     def _apply(self, actions: list[ActionRecord]) -> list[ActionRecord]:
@@ -148,6 +152,15 @@ class SentinelAgent:
         return journal
 
     def _succeed(self, inc, ctx, rca, tier, applied) -> None:
+        # The pipeline is healthy again, so the warnings have to come down with
+        # it: a breaker left open after the fix keeps the scoring job down for no
+        # reason, and flags that outlive their incident stop being read.
+        released, failed = self._release_containment(inc.id)
+        if released:
+            log("restore", f"lifted {released} protective measure(s) — breaker "
+                           f"closed, downstream flags cleared"
+                + (f" ({failed} could not be lifted)" if failed else ""))
+
         pr = self._propose_fix(inc, ctx, rca) if self.policy.needs_human(tier) else None
         self._resolve(
             inc, ctx, rca,
@@ -168,18 +181,59 @@ class SentinelAgent:
         log("fix", f"permanent fix for review: {result}")
         return result
 
-    def _roll_back(self, inc, ctx, rca, tier, failures) -> None:
-        reverted, failed = self._rollback(inc.id)
-        log("rollback", f"validation failed — reverted {reverted} action(s)"
+    def _contain(self, inc, ctx, rca, tier, applied, failures) -> None:
+        """The agent did everything available to it and the incident persists.
+
+        Some things genuinely cannot be repaired from here — a feed that stopped
+        delivering has no rows to restore. Withdrawing the protection because the
+        pipeline is still broken would be exactly backwards, so the tags and
+        breakers stay up and a human is paged. The post-mortem is still recorded:
+        memory should learn from the incidents we cannot fix too.
+        """
+        held = ", ".join(sorted({a.action_type.value for a in applied}))
+        log("contain", f"no repair exists for {rca.change_type.value} — "
+                       f"holding {len(applied)} protective action(s): {held}")
+        log("contain", f"still failing (expected): {failures}")
+        self._escalate(inc, ctx, rca, tier,
+                       reason="contained, but only a human can resolve this")
+        self._resolve(
+            inc, ctx, rca,
+            actions_taken=[a.action_type.value for a in applied],
+            resolution=(f"CONTAINED, awaiting human — {rca.recommended_mitigation}. "
+                        f"Protection held: {held}. Outstanding: {failures}"),
+            resolved=False,
+        )
+
+    def _roll_back(self, inc, ctx, rca, tier, applied, failures) -> None:
+        reverted, failed = self._rollback(inc.id, mutating_only=True)
+        held = [a for a in applied if self.policy.is_protective(a.action_type)]
+        log("rollback", f"validation failed — withdrew {reverted} data action(s)"
                         + (f", {failed} could not be reverted" if failed else ""))
+        if held:
+            log("rollback", f"keeping {len(held)} protective action(s) in place — "
+                            f"the pipeline is still bad, so the warning stands")
         self._escalate(inc, ctx, rca, tier,
                        reason=f"validation still failing: {failures}")
 
-    def _rollback(self, incident_id: str) -> tuple[int, int]:
+    def _release_containment(self, incident_id: str) -> tuple[int, int]:
+        release = getattr(self.m, "release_containment", None)
+        if release is None:
+            return 0, 0
+        try:
+            return release(incident_id)
+        except Exception:
+            return 0, 0
+
+    def _rollback(self, incident_id: str,
+                  mutating_only: bool = False) -> tuple[int, int]:
         rollback = getattr(self.m, "rollback", None)
-        if rollback is not None:
+        if rollback is None:
+            return 0, 0
+        try:
+            return rollback(incident_id, mutating_only=mutating_only)
+        except TypeError:
+            # a Mechanisms implementation with the older single-argument rollback
             return rollback(incident_id)
-        return 0, 0
 
     def _escalate(self, inc, ctx, rca, tier, reason: str) -> None:
         log("escalate", f"paging {ctx.owners or ['(no owner on the asset)']} — {reason}")
@@ -187,7 +241,7 @@ class SentinelAgent:
             self._propose_fix(inc, ctx, rca)
 
     def _resolve(self, inc, ctx, rca, actions_taken: list[str],
-                 resolution: str) -> None:
+                 resolution: str, resolved: bool = True) -> None:
         from agent.contracts import PostMortem
 
         pm = PostMortem(
@@ -199,9 +253,20 @@ class SentinelAgent:
             resolution=resolution,
             resolved_at=datetime.now(timezone.utc),
         )
-        self.m.write_back(pm)
-        log("resolve", "incident resolved; post-mortem written to the graph "
-                       "(asset + model card), degraded tags cleared")
+        self._write_back(pm, resolved)
+        if resolved:
+            log("resolve", "incident resolved; post-mortem written to the graph "
+                           "(asset + model card), degraded tags cleared")
+        else:
+            log("resolve", "incident CONTAINED, not resolved; post-mortem written "
+                           "to the graph, degraded tags left in place")
+
+    def _write_back(self, pm, resolved: bool) -> None:
+        try:
+            self.m.write_back(pm, resolved=resolved)
+        except TypeError:
+            # a Mechanisms implementation predating the contained/resolved split
+            self.m.write_back(pm)
 
     # --- reporting ----------------------------------------------------- #
     @staticmethod

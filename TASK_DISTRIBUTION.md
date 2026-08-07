@@ -29,7 +29,7 @@ is signed off.
 |---|---|---|
 | **0** | Structural repairs + foundation modules (behaviour-neutral) | ✅ |
 | **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
-| **2** | Six new threat classes (detectors, probes, scenarios) | ⬜ |
+| **2** | Six new threat classes (detectors, probes, scenarios) | ✅ |
 | **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ⬜ |
 | **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ⬜ |
 | **5** | *(optional)* Intelligence-plane remainder: #6 Comms, #7 Cost Meter, #12 Ask-the-On-Call, git-commit detector | not scheduled |
@@ -120,6 +120,46 @@ that drops to protective-only.
   piped, because Windows selects cp1252 for redirected stdout. Fixed at the entry
   points (`agent/console.py`) rather than by avoiding punctuation.
 
+### Phase 2 — what landed
+
+*Five detectors, six probes, six scenarios. The agent can now see the failures
+that leave every assertion green.*
+
+| Threat | Detection | Outcome |
+|---|---|---|
+| `stale_feed` | `FreshnessDetector` — lag vs the **baseline's** newest row, not wall-clock (the seed data is synthetic and already days old, so a clock check would fire permanently) | **contained** |
+| `volume_collapse` | `VolumeAnomalyDetector` — row counts vs baseline | **repaired** (pin) |
+| `model_drift` | `ModelDriftDetector` — scoring snapshot vs baseline through `ml/drift.py` | **repaired** (repoint) |
+| `training_serving_skew` | `TrainingServingSkewDetector` — serving means vs the champion's `train_mean_*` | **contained** |
+| `label_leakage` | `LabelLeakageDetector` — `roc_auc` **above** a ceiling | **repaired** + code fix |
+| `duplicate_batch` | reuses `DataHubAssertionDetector` | **repaired** (dedupe) |
+
+**Three of these leave all 22 dbt assertions passing.** That is the point: a
+pipeline can be badly wrong while every test it has says otherwise.
+
+**Containment as a first-class outcome.** Some incidents cannot be repaired from
+here — data that never arrived cannot be restored from a snapshot. Previously the
+gate would go red, and the agent would respond by **reverting the circuit breaker
+and letting the pipeline keep serving bad data**. Now a plan made only of
+protective actions is recognised as containment: the tags and breaker hold, a
+post-mortem is recorded as *contained, awaiting human*, `Sentinel-Resolved` is
+withheld, and the incident stays visibly open. When an incident *is* genuinely
+repaired, the protection is lifted automatically — a breaker that outlives its
+incident is how people learn to ignore breakers.
+
+**Correctness fixes this phase depended on:**
+
+| Fix | What it prevented |
+|---|---|
+| `SIGNAL_TO_CHANGE` table in `rca.py` | five of six new classes would have been classified `unknown` and received the do-nothing fallback recipe |
+| `_asset_urn` / `upstream_path` urn guards | three detectors fire on **mlModel** urns, where the old code invented a dataset urn that does not exist and used it as an action target |
+| `ModelInputCheck` | the gate only measured `roc_auc`, which is *fine* during a skew incident — the agent declared victory over a problem it had only contained |
+| Selective rollback | see containment above |
+| `identify_leaks` — floor **plus** dominance over the runner-up | an absolute correlation threshold either missed the real leak (0.70) or would flag genuinely predictive features |
+| `classify()` all-null rule | **latent bug in existing code**: `schema_change` had always resolved to `unknown`/low confidence, because the renamed column still exists and is simply empty |
+| `_readable` on the DataHub assertion path | incidents read `1 failed assertion: a321883ce7` |
+| champion restore uses the healthy band | `reset` would have reinstated the **leaked** 0.998 model, since every trained version is tagged validated |
+
 ---
 
 ## Shared foundation (done — Srinjoy)
@@ -199,12 +239,12 @@ than cut from the bottom.
 | Data (assertion + profiling) | pre-phase | ✅ |
 | Dependency / API break | pre-phase | ✅ |
 | ML training regression | pre-phase | ✅ |
-| Model drift | **2** | ⬜ |
-| Freshness / SLA | **2** | ⬜ |
-| Volume anomaly | **2** | ⬜ |
-| Label leakage | **2** | ⬜ |
-| Duplicate records | **2** | ⬜ (reuses the assertion detector; new probe + remediation) |
-| Training/serving skew | **2** | ⬜ |
+| Model drift | **2** | ✅ |
+| Freshness / SLA | **2** | ✅ |
+| Volume anomaly | **2** | ✅ |
+| Label leakage | **2** | ✅ |
+| Duplicate records | **2** | ✅ (reuses the assertion detector; new probe + remediation) |
+| Training/serving skew | **2** | ✅ |
 | **Git-commit-as-signal** | **not scheduled** | ⬜ — see Not scheduled below |
 
 ---
@@ -290,16 +330,25 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
   auto-restored on resolution. Airflow/Dagster pausing is still ⬜.
 - **Quarantine / backfill** 🔨 — bad rows are isolated into a `sentinel_quarantine`
   table named for the incident; triggering a corrected backfill is still ⬜.
-- **Real multi-file / multi-repo PRs** 🔨 — CodeFixTool opens single-file PRs today;
-  extend to multi-file migrations, run the test suite on the fix, and scan across
-  many repos in an org.
+- **Real multi-file / multi-repo PRs** 🔨 — CodeFixTool now takes a generic
+  `(file, instruction)` request rather than only understanding vendor advisories,
+  so any incident class can earn a code fix — a label leak produces a diff
+  removing the leaking feature from `ml/config.py`. Still single-file; multi-file
+  migrations, running the test suite on the fix, and org-wide scanning remain ⬜.
 - **Fix verification** ⬜ — apply the generated migration in a sandbox and run tests
   before proposing (Parallel-Universe / shadow validation).
 
 ## 2. Detection — more signal sources (Detector plugins)
-- ⭐ **Model-drift detector** ⬜ — prediction-distribution shift from the scoring loop
-  (pairs with `distribution_drift`, catches silent model rot with no assertion).
-- ⭐ **Freshness / SLA detector** ⬜ — stale tables / late pipelines.
+- ⭐ **Model-drift detector** ✅ — prediction-distribution shift from the scoring loop,
+  sharing `ml/drift.py` with the scoring job so the two cannot disagree.
+- ⭐ **Freshness / SLA detector** ✅ — lag measured against the recorded healthy
+  baseline rather than wall-clock.
+- **Volume-anomaly detector** ✅ — row counts vs baseline, catching both a thin
+  delivery and a re-delivered batch.
+- **Label-leakage detector** ✅ — a champion scoring *above* a ceiling, with the
+  leaking feature named by correlation dominance.
+- **Training/serving-skew detector** ✅ — serving feature means vs the champion's
+  logged training distribution.
 - **Git-commit detector** ⬜ — a commit to a transform/model/prompt as a signal.
 - **Real dependency diff** 🔨 — diff `requirements`/`poetry.lock` over time (today
   we read hand-authored advisories); ingest vendor changelogs / GitHub releases /
@@ -313,7 +362,7 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 - **Schema-history / timeline probe** ⬜ — DataHub timeline API: exactly what changed
   and when (pin the change to a timestamp → correlate to a commit/deploy).
 - **Git-blame probe** ⬜ — the exact commit + author behind a change (Drift Attribution).
-- **Training/serving-skew probe** ⬜ — feature distributions at train vs serve time.
+- **Training/serving-skew probe** ✅ — feature distributions at train vs serve time.
 - **Cross-incident correlation** 🔨 — basic same-root dedupe exists; add semantic
   clustering of simultaneous incidents to one root cause.
 - **LLM-pipeline probes** ⬜ — prompt-template diff, tokenizer/config change, eval-set

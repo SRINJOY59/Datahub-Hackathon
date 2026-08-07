@@ -1,16 +1,24 @@
-"""CodeFixTool — generates a real code fix for a dependency/API breaking change
-and opens a PR (or writes a diff locally when no GitHub token is set).
+"""CodeFixTool — generates a real code fix and opens a PR (or writes a diff
+locally when no GitHub token is set).
 
-Flow: read the affected file -> ask the LLM for the fully-migrated file ->
+Flow: read the affected file -> ask the LLM for the fully-rewritten file ->
 compute a unified diff locally with difflib (so the diff is always valid) ->
 write it to examples/generated_fixes/ -> open a draft PR if configured.
 
 This is the "apply the change, don't just announce it" step.
+
+The tool takes a `FixRequest`: a file and an instruction. A vendor advisory is
+one way to arrive at one, but not the only way — a leaked label is repaired by
+removing a feature from the model's config, with no advisory anywhere in sight.
+Keeping the request generic means an incident class earns a real code fix by
+describing what needs changing, rather than by pretending to be a dependency
+upgrade.
 """
 from __future__ import annotations
 
 import difflib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -20,8 +28,21 @@ from agent.llm import LLMClient
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXES_DIR = REPO_ROOT / "examples" / "generated_fixes"
 
-_SYSTEM = ("You are a senior engineer applying a dependency/API migration. Return "
-           "the COMPLETE updated file content only — no markdown fences, no prose.")
+_SYSTEM = ("You are a senior engineer applying a targeted change to one file. "
+           "Return the COMPLETE updated file content only — no markdown fences, "
+           "no prose. Change only what the instruction requires.")
+
+NOTHING_TO_FIX = "no affected files found — nothing to fix"
+NO_FIX_GENERATED = "could not generate a fix (LLM unavailable or no change)"
+
+
+@dataclass
+class FixRequest:
+    """One file, and what needs to change about it."""
+    file: str                  # repo-relative path
+    instruction: str           # what to change and why
+    title: str = "code fix"    # PR title / commit subject
+    detail: str = ""           # extra context for the PR body
 
 
 class CodeFixTool:
@@ -32,45 +53,83 @@ class CodeFixTool:
         self.token = github_token or os.getenv("GITHUB_TOKEN") or ""
         self.repo = github_repo or os.getenv("GITHUB_REPO") or ""
 
+    # ------------------------------------------------------------------ #
     def propose_fix(self, incident: Incident, context: ContextBundle,
                     root_cause: str) -> str:
-        adv = (incident.raw_evidence or {}).get("advisory", {})
-        usages = (incident.raw_evidence or {}).get("usages", [])
-        if not usages:
-            return "no affected files found — nothing to fix"
+        request = self._request_for(incident, root_cause)
+        if request is None:
+            return NOTHING_TO_FIX
+        return self.apply_request(incident, request)
 
-        target = usages[0]["file"]  # primary affected file
-        path = REPO_ROOT / target
+    def apply_request(self, incident: Incident, request: FixRequest) -> str:
+        """Rewrite one file per the request, diff it, and open a PR if possible."""
+        path = REPO_ROOT / request.file
+        if not path.exists():
+            return NOTHING_TO_FIX
         original = path.read_text(encoding="utf-8", errors="ignore")
 
-        fixed = self._migrate(target, original, adv)
+        fixed = self._rewrite(request, original)
         if fixed is None or fixed.strip() == original.strip():
-            return "could not generate a fix (LLM unavailable or no change)"
+            return NO_FIX_GENERATED
 
         diff = "".join(difflib.unified_diff(
             original.splitlines(keepends=True),
             fixed.splitlines(keepends=True),
-            fromfile=f"a/{target}", tofile=f"b/{target}",
+            fromfile=f"a/{request.file}", tofile=f"b/{request.file}",
         ))
 
         FIXES_DIR.mkdir(parents=True, exist_ok=True)
         diff_path = FIXES_DIR / f"{incident.id}.diff"
         diff_path.write_text(diff, encoding="utf-8")
 
-        pr = self._open_pr(incident, target, fixed, adv) if self.token and self.repo else None
+        pr = (self._open_pr(incident, request, fixed)
+              if self.token and self.repo else None)
         return pr or diff_path.relative_to(REPO_ROOT).as_posix()
 
     # ------------------------------------------------------------------ #
-    def _migrate(self, filename: str, content: str, adv: dict) -> Optional[str]:
+    def _request_for(self, incident: Incident,
+                     root_cause: str) -> Optional[FixRequest]:
+        """Derive a fix request from the incident, when one applies.
+
+        Dependency advisories carry the affected file and the migration text.
+        Other incident classes attach a `fix_request` to their evidence when they
+        know what code needs changing; most attach nothing, because most
+        incidents are repaired by moving data rather than by editing code.
+        """
+        evidence = incident.raw_evidence or {}
+
+        explicit = evidence.get("fix_request")
+        if isinstance(explicit, dict) and explicit.get("file"):
+            return FixRequest(
+                file=explicit["file"],
+                instruction=explicit.get("instruction", root_cause),
+                title=explicit.get("title", "code fix"),
+                detail=explicit.get("detail", ""),
+            )
+
+        adv = evidence.get("advisory") or {}
+        usages = evidence.get("usages") or []
+        if adv and usages:
+            return FixRequest(
+                file=usages[0]["file"],
+                instruction=(
+                    f"Dependency change: {adv.get('package')} "
+                    f"{adv.get('from_version')} -> {adv.get('to_version')}\n"
+                    f"Breaking change: {adv.get('summary')}\n"
+                    f"Migration required: {adv.get('migration')}"
+                ),
+                title=f"{adv.get('package')} {adv.get('to_version')} migration",
+                detail=adv.get("migration", ""),
+            )
+        return None
+
+    def _rewrite(self, request: FixRequest, content: str) -> Optional[str]:
         if not (self.llm and self.llm.available()):
             return None
         prompt = (
-            f"File: {filename}\n"
-            f"Dependency change: {adv.get('package')} {adv.get('from_version')} -> "
-            f"{adv.get('to_version')}\n"
-            f"Breaking change: {adv.get('summary')}\n"
-            f"Migration required: {adv.get('migration')}\n\n"
-            f"Apply the migration to this file and return the full updated content:\n\n"
+            f"File: {request.file}\n"
+            f"{request.instruction}\n\n"
+            f"Apply this change to the file and return the full updated content:\n\n"
             f"{content}"
         )
         try:
@@ -79,8 +138,8 @@ class CodeFixTool:
             return None
         return _strip_fences(out)
 
-    def _open_pr(self, incident: Incident, filename: str, content: str,
-                 adv: dict) -> Optional[str]:
+    def _open_pr(self, incident: Incident, request: FixRequest,
+                 content: str) -> Optional[str]:
         try:
             from github import Github
 
@@ -90,15 +149,15 @@ class CodeFixTool:
             branch = f"sentinel/{incident.id.lower()}"
             sha = repo.get_branch(base).commit.sha
             repo.create_git_ref(ref=f"refs/heads/{branch}", sha=sha)
-            gh_file = repo.get_contents(filename, ref=branch)
+            gh_file = repo.get_contents(request.file, ref=branch)
             repo.update_file(
-                filename,
-                f"fix: apply {adv.get('package')} {adv.get('to_version')} migration",
+                request.file, f"fix: {request.title}",
                 content, gh_file.sha, branch=branch,
             )
             pr = repo.create_pull(
-                title=f"[Sentinel] {adv.get('package')} {adv.get('to_version')} migration",
-                body=f"Automated migration for {incident.id}.\n\n{adv.get('migration')}",
+                title=f"[Sentinel] {request.title}",
+                body=(f"Automated fix for {incident.id}.\n\n"
+                      f"{request.detail or request.instruction}"),
                 head=branch, base=base, draft=True,
             )
             return pr.html_url

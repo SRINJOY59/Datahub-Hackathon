@@ -54,12 +54,19 @@ class DataHubContextTool:
     # detection
     # ------------------------------------------------------------------ #
     def _assertion_name(self, assertion_urn: str) -> str:
-        """Readable name for a dbt-test assertion (from its dbt_unique_id)."""
+        """Readable name for a dbt-test assertion (from its dbt_unique_id).
+
+        dbt appends a uniqueness hash to generated tests, so the last segment is
+        often meaningless — an incident reading "1 failed assertion: a321883ce7"
+        tells the on-call nothing about what broke.
+        """
+        from agent.tools.warehouse.dbt_runner import _readable
+
         info = self.graph.get_aspect(assertion_urn, AssertionInfoClass)
         if info and info.customProperties:
             uid = info.customProperties.get("dbt_unique_id")
             if uid:  # e.g. test.fraud_pipeline.assert_avg_txn_amount_plausible
-                return uid.split(".")[-1]
+                return _readable(uid)
         if info and info.description:
             return info.description
         return _short_name(assertion_urn)

@@ -9,11 +9,20 @@ writes a post-mortem back so the graph gets smarter each time.
 
 **Incident classes it handles today**
 
-- **Data** — failed dbt assertions + data profiling (null spike, scale shift,
-  distribution drift, schema change).
+- **Data quality** — failed dbt assertions + profiling: null spike, scale shift,
+  distribution drift, schema change, duplicate batch.
+- **Silent data failures** — the ones every assertion passes: a feed that stopped
+  delivering, a batch that arrived at a fraction of its size.
+- **Silent model failures** — prediction drift, training/serving skew, and label
+  leakage (a model that got *suspiciously good* because the target leaked into a
+  feature).
 - **Dependency / API breaking change** — a vendor advisory triggers a codebase
   scan and an LLM-generated migration PR ("self-maintaining APIs").
 - **ML training regression** — a champion model whose eval metrics dropped.
+
+Half of those leave **all 22 dbt assertions green**. A pipeline can be badly
+wrong while every test it has says otherwise, which is why detection here does
+not rely on assertions alone.
 
 **How the RCA pipeline works**
 
@@ -188,6 +197,46 @@ usages, traces them to the impacted DataHub model, and writes a real migration
 diff to `examples/generated_fixes/<incident>.diff`. Set `GITHUB_TOKEN` and
 `GITHUB_REPO` in `.env` to open an actual draft PR instead.
 
+### Silent failures — the ones dbt cannot see
+
+These leave **all 22 assertions passing**. Check for yourself between the inject
+and the agent run:
+
+```bash
+python -m scenarios stale_feed          # the feed stopped delivering
+python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('dbt green:', D().test().ok)"
+python -m agent                          # detects anyway, and CONTAINS
+python -m scenarios reset
+```
+
+Expect `stale_feed` to be **contained**, not resolved: the missing rows cannot be
+conjured, so the agent flags every downstream asset, opens the scoring breaker,
+pages the owner, and leaves the protection up. Confirm it held:
+
+```bash
+cat .sentinel/breakers/fraud_scoring_api.json
+python -m ml.score                       # refuses to run
+```
+
+The others follow the same three-step loop:
+
+| Scenario | What breaks | Outcome |
+|---|---|---|
+| `volume_collapse` | 60% of rows never arrive | **repaired** — pinned back from the last-good snapshot |
+| `model_drift` | a uniform repricing shifts predictions | **repaired** — champion repointed |
+| `training_serving_skew` | serving features drift from the training distribution | **contained** — only retraining truly fixes it |
+| `label_leakage` | a label-derived surcharge leaks into `amount`; `roc_auc` hits 0.998 | **repaired** + a diff removing the feature |
+| `duplicate_batch` | a batch is delivered twice | **repaired** — deduplicated |
+
+`label_leakage` is the one worth watching. A detector that only checks for
+metrics *falling* would wave it through and ship the model:
+
+```bash
+python -m scenarios label_leakage && python -m agent
+cat examples/generated_fixes/LEAK-*.diff      # removes `amount` from FEATURES
+python -m scenarios reset
+```
+
 ### ML training regression
 
 ```bash
@@ -239,10 +288,19 @@ being alive.
 | `tag_asset` | downstream assets get `Sentinel-Degraded` in DataHub |
 | `pause_job` | a breaker opens and **`python -m ml.score` refuses to run** |
 
-Then the validation gate runs — dbt assertions, model metrics, and the volume /
-freshness invariants — and **if it fails, everything is rolled back through the
-journal automatically** and the owners are paged. Nothing is reported as resolved
-that a check did not independently confirm.
+Then the validation gate runs — dbt assertions, model metrics, the model's input
+distributions, and the volume / freshness invariants. Nothing is reported as
+resolved that a check did not independently confirm.
+
+### Repaired, contained, or rolled back
+
+Not every incident can be fixed, and pretending otherwise is worse than saying so.
+
+| Gate result | What the agent does |
+|---|---|
+| **green** | resolved. Protection is lifted automatically — breaker closed, downstream flags cleared — and the post-mortem written to the graph. |
+| **red, after a repair attempt** | the data actions are withdrawn through the journal, but **the protective ones stay**: the pipeline is still bad, so the warning stands. Owners are paged. |
+| **red, and no repair was possible** | **contained.** Data that never arrived cannot be restored from a snapshot. The tags and breaker hold, the incident stays open with `Sentinel-Degraded` in place, `Sentinel-Resolved` is withheld, and a post-mortem is recorded as *contained, awaiting human* — so memory learns from the incidents the agent cannot fix too. |
 
 ### How much it is allowed to do on its own
 
@@ -343,6 +401,18 @@ python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; d=D(); d
 The `rolled back` fingerprint must equal the `poisoned` one, and the assertions
 must print `False` — the pipeline is broken again, which is what proves the fix
 had been real rather than reported.
+
+And that a *silent* failure is caught with dbt fully green, then contained rather
+than falsely resolved:
+
+```bash
+python -m scenarios reset
+python -m scenarios stale_feed
+python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('dbt green:', D().test().ok)"   # True
+python -m agent                                        # must say CONTAINED
+python -m ml.score                                     # must refuse: breaker open
+python -m scenarios reset
+```
 
 Check the circuit breaker independently:
 

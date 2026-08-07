@@ -85,6 +85,24 @@ class AutonomyPolicy:
         return tier in (AutonomyTier.PR_ONLY, AutonomyTier.HUMAN_ONLY)
 
     @staticmethod
+    def is_protective(action_type: ActionType) -> bool:
+        return action_type in PROTECTIVE_ACTIONS
+
+    @staticmethod
+    def is_containment_only(actions: list) -> bool:
+        """True when a plan can only limit the damage, never repair it.
+
+        Some incidents are outside the agent's reach by nature: a feed that
+        stopped delivering cannot be restored from a snapshot, because the rows
+        never existed. For those the validation gate stays red no matter what the
+        agent does, and treating that as a failed mitigation would be wrong — the
+        agent did everything available to it.
+        """
+        return bool(actions) and all(
+            a.action_type in PROTECTIVE_ACTIONS for a in actions
+        )
+
+    @staticmethod
     def explain(tier: AutonomyTier, context: ContextBundle,
                 rca: RootCauseAnalysis | None) -> str:
         confidence = (rca.confidence if rca else "unknown")

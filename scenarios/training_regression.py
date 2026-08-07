@@ -75,24 +75,28 @@ class TrainingRegressionScenario(ModelScenario):
                 f"restore with `python -m scenarios reset` or `python -m ml.train`")
 
     def cleanup(self) -> None:
-        """Point `champion` back at the newest version that passed validation."""
-        try:
-            import mlflow
-            from ml.config import CHAMPION_ALIAS, MLFLOW_TRACKING_URI, MODEL_NAME
+        """Point `champion` back at the newest version worth serving.
 
-            mlflow.set_tracking_uri(MLFLOW_TRACKING_URI)
-            client = mlflow.MlflowClient()
-            healthy = [
-                v for v in client.search_model_versions(f"name='{MODEL_NAME}'")
-                if v.tags.get("validation_status") == "passed"
-            ]
-            if not healthy:
+        "Passed validation" alone is not enough: every training run writes that
+        tag, including one that scored 0.998 because the label leaked into a
+        feature. A restore that picked the highest-scoring validated version
+        would happily reinstate the very model another scenario just removed, so
+        this reuses the same healthy-band check the Time Machine rolls back with.
+        """
+        try:
+            from agent.tools.warehouse.champion import ChampionMetrics
+
+            champion = ChampionMetrics()
+            current = champion.current()
+            if current is not None and current.validated and current.healthy:
+                return  # already serving something sound
+
+            best = champion.last_good(
+                exclude_version=current.version if current else None)
+            if best is None or (current and best.version == current.version):
                 return
-            best = max(healthy, key=lambda v: int(v.version))
-            current = client.get_model_version_by_alias(MODEL_NAME, CHAMPION_ALIAS)
-            if current.version == best.version:
-                return
-            client.set_registered_model_alias(MODEL_NAME, CHAMPION_ALIAS, best.version)
-            print(f"[reset] champion restored: v{current.version} -> v{best.version}")
+            if champion.set_alias(best.version):
+                print(f"[reset] champion restored: "
+                      f"v{current.version if current else '?'} -> v{best.version}")
         except Exception:
             return  # no MLflow / no registry yet — nothing to restore

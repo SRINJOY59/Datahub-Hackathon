@@ -94,6 +94,21 @@ class ColumnLineageTool:
                 break
         return order
 
+    def source_depth(self, dataset_urn: str) -> int:
+        """How source-like a table is — higher means further upstream.
+
+        Used to rank several affected tables when the incident is table-level
+        (a stopped feed, a halved batch) and there is no anomalous column to
+        follow. A table with nothing upstream of it *is* the origin; one with a
+        long ancestry is downstream of the problem, showing the same symptom
+        second-hand. Counting ancestors and inverting gives that ordering without
+        needing to know the pipeline's shape in advance.
+        """
+        try:
+            return MAX_HOPS - len(self.table_upstream_path(dataset_urn))
+        except Exception:
+            return 0
+
     def upstream_path(self, start_dataset_urn: str, column: str) -> list[ColumnRef]:
         """Walk from (start dataset, column) to the source column. Returns the
         path as ColumnRefs, deepest (source) last."""

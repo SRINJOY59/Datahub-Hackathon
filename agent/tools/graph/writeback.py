@@ -38,16 +38,30 @@ RESOLVED_DESC = ("Sentinel detected, root-caused and resolved an incident on thi
 class DataHubWriteBack:
     def __init__(self, gms_server: str = "http://localhost:8080",
                  memory: MemoryStore | None = None) -> None:
+        self.gms_server = gms_server
         self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
         self.memory = memory
 
     # ------------------------------------------------------------------ #
     def write_back(self, pm: PostMortem,
-                   context: ContextBundle | None = None) -> None:
+                   context: ContextBundle | None = None,
+                   resolved: bool = True) -> None:
+        """Record the outcome in the graph.
+
+        `resolved=False` means the agent contained the incident but could not
+        repair it — a stale feed, say, where the missing rows are simply not
+        something an agent can conjure. The post-mortem is still written, because
+        memory should learn from the incidents we cannot fix as much as the ones
+        we can, but the warnings stay up: the downstream assets keep
+        `Sentinel-Degraded`, and nothing is stamped resolved. Clearing them here
+        would tell every reader of the catalog that the data is fine when it
+        demonstrably is not.
+        """
         self._record(pm)
         self._record_on_models(pm, context)
-        self._clear_degraded(pm, context)
-        self._stamp_resolved(pm.asset_urn)
+        if resolved:
+            self._clear_degraded(pm, context)
+            self._stamp_resolved(pm.asset_urn)
 
     # ------------------------------------------------------------------ #
     def _record(self, pm: PostMortem) -> None:

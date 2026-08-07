@@ -98,15 +98,23 @@ class ActionJournal:
 
     # --- rollback --------------------------------------------------------- #
     def undo_all(self, incident_id: str,
-                 undo: Callable[[ActionRecord], bool]) -> tuple[int, int]:
+                 undo: Callable[[ActionRecord], bool],
+                 only: Optional[Callable[[ActionRecord], bool]] = None
+                 ) -> tuple[int, int]:
         """Replay the inverses of everything still applied for this incident, in
         reverse order. Returns (reverted, failed).
 
         Reverse order matters: actions were applied as a sequence that may depend
         on each other, so unwinding has to run backwards, like a stack.
+
+        `only` narrows what gets undone. The caller uses it to keep protective
+        actions in place while withdrawing the ones that changed data — a failed
+        repair is a reason to keep the circuit breaker closed, not to open it.
         """
         ok = failed = 0
         for action in reversed(self.applied_for_incident(incident_id)):
+            if only is not None and not only(action):
+                continue
             try:
                 if undo(action):
                     self.record_reverted(action)

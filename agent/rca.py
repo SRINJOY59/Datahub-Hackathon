@@ -3,17 +3,19 @@ RootCauseAnalysis.
 
 Flow:
   1. run every probe that applies_to the incident -> Evidence[]
-  2. pick the deterministic root cause: the anomalous column furthest upstream
+  2. pick the deterministic root cause: the anomalous column furthest upstream,
+     or — for table-level incidents with no column to blame — the kind of change
+     the signal itself implies (SIGNAL_TO_CHANGE)
   3. recall similar past incidents from memory (precedent)
   4. LLM synthesizes a narrative over evidence + precedent (never invents facts)
 
-Adding a new incident class = registering a new probe. The engine is unchanged.
+Adding a new incident class = registering a new probe, and adding one row to
+SIGNAL_TO_CHANGE if the class has no column-level symptom. The engine is
+unchanged.
 """
 from __future__ import annotations
 
 from typing import Optional
-
-import datahub.emitter.mce_builder as builder
 
 from agent.contracts import (
     ChangeType,
@@ -23,16 +25,37 @@ from agent.contracts import (
     MemoryStore,
     PriorIncident,
     RootCauseAnalysis,
+    SignalType,
 )
 from agent.llm import LLMClient
 from agent.prompts.rca import RCA_PROMPT, RCA_SYSTEM
 from agent.registry import build_probes
 from agent.schemas import RCAResult
 from agent.tools.graph.column_lineage import ColumnLineageTool
+from agent.tools.graph.urns import is_dataset, sibling_dataset_urn
 
 # import the plugin packages so their decorators register
 import agent.tools.probes  # noqa: F401
 import agent.tools.detectors  # noqa: F401
+
+# What kind of change each signal implies, when no probe has pinned an anomalous
+# column. Some incidents are table-level facts — a feed that stopped, a batch
+# that arrived at a tenth of its size — and have no column to blame, so without
+# this they would fall through to UNKNOWN and the planner would reach for its
+# do-nothing fallback. A new signal type gets its remediation by adding a row.
+SIGNAL_TO_CHANGE: dict[SignalType, ChangeType] = {
+    SignalType.DEPENDENCY_CHANGE: ChangeType.DEPENDENCY_CHANGE,
+    SignalType.CODE_CHANGE: ChangeType.CODE_CHANGE,
+    SignalType.TRAINING_REGRESSION: ChangeType.TRAINING_REGRESSION,
+    SignalType.MODEL_DRIFT: ChangeType.MODEL_DRIFT,
+    SignalType.FRESHNESS: ChangeType.FRESHNESS_LAG,
+    SignalType.VOLUME_ANOMALY: ChangeType.VOLUME_ANOMALY,
+    SignalType.LABEL_LEAKAGE: ChangeType.LABEL_LEAKAGE,
+    SignalType.TRAINING_SERVING_SKEW: ChangeType.TRAINING_SERVING_SKEW,
+    # ASSERTION_FAILURE and SCHEMA_CHANGE are deliberately absent: a failed
+    # assertion says something is wrong, not what, so those are left to the
+    # profiler's column-level classification rather than guessed from the signal.
+}
 
 
 class RCAEngine:
@@ -68,16 +91,15 @@ class RCAEngine:
         if root:
             change_type = ChangeType(root.data["change_type"])
             root_column = root.data["column"]
-            root_asset = self._asset_urn(incident.asset_urn, root.data["table"])
-        elif incident.signal_type.value in ("dependency_change", "code_change"):
-            change_type = _safe_change_type(incident.signal_type.value)
-            root_column, root_asset = None, incident.asset_urn
-        elif incident.signal_type.value == "training_regression":
-            change_type = ChangeType.TRAINING_REGRESSION
-            root_column, root_asset = None, incident.asset_urn
+            root_asset = self._asset_urn(incident, root)
         else:
-            change_type = ChangeType.UNKNOWN  # refined from the LLM below
-            root_column, root_asset = None, incident.asset_urn
+            # No column-level anomaly. The signal itself may still say what kind
+            # of change this is; only fall back to UNKNOWN (and the LLM) when it
+            # genuinely doesn't.
+            change_type = SIGNAL_TO_CHANGE.get(incident.signal_type,
+                                               ChangeType.UNKNOWN)
+            root_column, root_asset = None, self._root_asset_without_column(
+                incident, evidence)
 
         precedents = (self.memory.recall(incident, context, change_type.value)
                       if self.memory else [])
@@ -101,8 +123,12 @@ class RCAEngine:
             confidence=confidence,
             narrative=narrative,
             evidence=[e.summary for e in evidence],
+            # Only datasets have a table lineage to walk; asking for the upstream
+            # path of a model urn returns a one-element path made of the model's
+            # own name, which reads like real lineage and is not.
             upstream_path=(self.lineage.table_upstream_path(incident.asset_urn)
-                           if self.lineage else []),
+                           if self.lineage and is_dataset(incident.asset_urn)
+                           else []),
             blast_radius=[n.name for n in context.downstream],
             recommended_mitigation=mitigation,
             precedents=[p.incident_id for p in precedents],
@@ -118,10 +144,34 @@ class RCAEngine:
         return max(data_ev, key=lambda e: e.data.get("depth", 0))
 
     @staticmethod
-    def _asset_urn(incident_asset_urn: str, table: str) -> str:
-        name = incident_asset_urn.split(",")[1]
-        prefix = name.rsplit(".", 1)[0]
-        return builder.make_dataset_urn("dbt", f"{prefix}.{table}", "PROD")
+    def _asset_urn(incident: Incident, root: Evidence) -> str:
+        """The urn of the asset a probe blamed.
+
+        A probe that already knows the dataset it profiled says so, and is
+        believed. Otherwise the urn is rebuilt from a sibling of the incident's
+        own asset — which only works when that asset *is* a dataset. Model-level
+        incidents (drift, leakage, skew) carry an mlModel urn, and rebuilding a
+        dataset urn from a model name would invent an asset that does not exist,
+        then use it as an action target and a memory key.
+        """
+        known = root.data.get("dataset_urn")
+        if known:
+            return known
+        table = root.data.get("table")
+        if table and is_dataset(incident.asset_urn):
+            return sibling_dataset_urn(incident.asset_urn, table)
+        return incident.asset_urn
+
+    @staticmethod
+    def _root_asset_without_column(incident: Incident,
+                                   evidence: list[Evidence]) -> str:
+        """For table-level incidents, blame the deepest asset any probe named —
+        a stale feed originates at the source, not where it was noticed."""
+        located = [e for e in evidence if e.data.get("dataset_urn")]
+        if not located:
+            return incident.asset_urn
+        deepest = max(located, key=lambda e: e.data.get("depth", 0))
+        return deepest.data["dataset_urn"]
 
     def _synthesize(self, incident, context, evidence, precedents) -> Optional[RCAResult]:
         """Structured LLM synthesis over evidence + precedent. Returns None (caller

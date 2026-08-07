@@ -100,6 +100,36 @@ def reingest() -> None:
     IngestionRunner().run()
 
 
+def rescore(update_baseline: bool = False) -> str:
+    """Run the scoring job against the rebuilt tables.
+
+    Some breakages only become visible once the model has actually scored the new
+    data. `update_baseline` decides which question the scenario is asking: left
+    alone, the new snapshot is compared against the old baseline and *prediction
+    drift* shows up; updated, the baseline moves with the data and only the gap
+    against the model's **training** distribution remains — which is
+    training/serving skew, a different problem with a different fix.
+    """
+    from ml.score import BASELINE_PATH, SNAPSHOT_PATH, score
+
+    snap = score()
+    SNAPSHOT_PATH.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+    if update_baseline:
+        BASELINE_PATH.write_text(json.dumps(snap, indent=2), encoding="utf-8")
+
+    return (f"scored {snap['n_scored']} rows: positive rate "
+            f"{snap['positive_pred_rate']:.4f}"
+            + ("; scoring baseline moved with it" if update_baseline else ""))
+
+
+def retrain() -> str:
+    """Retrain and re-register the champion on whatever the tables now hold."""
+    from ml.train import main as train_main
+
+    train_main()
+    return "retrained the champion on the current data"
+
+
 # --------------------------------------------------------------------------- #
 # The scenario hierarchy
 # --------------------------------------------------------------------------- #
@@ -140,6 +170,17 @@ class DataScenario(BaseScenario):
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         """Corrupt raw_transactions in place. Return a human description."""
 
+    def post_build(self) -> str:
+        """Anything that must happen after the models rebuild.
+
+        Some breakages only become visible once the ML side has run on the new
+        data — a drift signal needs a fresh scoring snapshot, a leaked label
+        needs a retrained model. Those steps read the rebuilt tables, so they
+        cannot run before dbt does. Returns a description, or '' when there is
+        nothing to do (which is the case for every purely-data scenario).
+        """
+        return ""
+
     def apply(self, reingest_after: bool = True) -> None:
         con = duckdb.connect(str(DUCKDB_PATH))
         try:
@@ -162,6 +203,10 @@ class DataScenario(BaseScenario):
         else:
             print(f"\n[{self.name}] assertions passed: {ok}  "
                   + ("(unexpected)" if ok else "<-- incident detected by dbt assertions"))
+
+        follow_up = self.post_build()
+        if follow_up:
+            print(f"\n[{self.name}] {follow_up}")
 
         if reingest_after:
             print(f"\n[{self.name}] refreshing DataHub...")
@@ -276,6 +321,10 @@ class PipelineReset:
         if dropped:
             print(f"[reset] discarded {dropped} per-incident restore point(s)")
 
+        cleared = _clear_degraded_tags()
+        if cleared:
+            print(f"[reset] removed Sentinel-Degraded from {cleared} asset(s)")
+
     @staticmethod
     def _capture_last_good() -> None:
         """Snapshot the healthy warehouse + record its shape. This is what
@@ -291,6 +340,49 @@ class PipelineReset:
         print(f"[reset] captured last-good snapshot of {len(tables)} table(s)")
         BaselineStore().capture()
         print("[reset] captured volume/freshness baseline")
+
+
+def _clear_degraded_tags() -> int:
+    """Take the agent's warning tags back off the graph.
+
+    A contained incident deliberately leaves `Sentinel-Degraded` in place, which
+    is right while the incident is open — but a reset declares the world healthy
+    again. Without this the warnings outlive the problems and every asset in the
+    catalog eventually looks permanently suspect, which is the fastest way to
+    make people stop reading them.
+    """
+    try:
+        import datahub.emitter.mce_builder as builder
+        from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
+        from datahub.metadata.schema_classes import GlobalTagsClass
+        from datahub.emitter.mcp import MetadataChangeProposalWrapper
+
+        from agent.tools.actuators.tag_asset import DEGRADED_TAG
+    except ImportError:
+        return 0
+
+    try:
+        graph = DataHubGraph(DataHubGraphConfig(server="http://localhost:8080"))
+        tag_urn = builder.make_tag_urn(DEGRADED_TAG)
+        urns = graph.get_urns_by_filter(entity_types=["dataset"], platform="dbt")
+    except Exception:
+        return 0
+
+    cleared = 0
+    for urn in list(urns):
+        try:
+            tags = graph.get_aspect(urn, GlobalTagsClass)
+            if not tags:
+                continue
+            remaining = [t for t in tags.tags if t.tag != tag_urn]
+            if len(remaining) == len(tags.tags):
+                continue
+            graph.emit_mcp(MetadataChangeProposalWrapper(
+                entityUrn=urn, aspect=GlobalTagsClass(tags=remaining)))
+            cleared += 1
+        except Exception:
+            continue
+    return cleared
 
 
 def capture_last_good(reingest_after: bool = False) -> None:

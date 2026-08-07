@@ -10,4 +10,5 @@ from agent.tools.checks import (  # noqa: F401
     data_invariants,
     dbt_checks,
     model_checks,
+    model_input_checks,
 )

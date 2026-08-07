@@ -135,17 +135,44 @@ class RealMechanisms(Mechanisms):
                   f"{action.target}: {type(e).__name__}: {e}")
             return False
 
-    def rollback(self, incident_id: str) -> tuple[int, int]:
-        """Undo everything still applied for an incident, newest first."""
-        return self.journal.undo_all(incident_id, self.undo)
+    def rollback(self, incident_id: str,
+                 mutating_only: bool = False) -> tuple[int, int]:
+        """Undo what an incident applied, newest first.
+
+        `mutating_only` withdraws the actions that changed data or what is
+        serving, while leaving the protective ones — tags and breakers — in
+        place. A repair that failed validation is a reason to keep downstream
+        consumers warned off, not to stop warning them.
+        """
+        only = None
+        if mutating_only:
+            from agent.policy import AutonomyPolicy
+
+            only = lambda a: not AutonomyPolicy.is_protective(a.action_type)  # noqa: E731
+        return self.journal.undo_all(incident_id, self.undo, only=only)
+
+    def release_containment(self, incident_id: str) -> tuple[int, int]:
+        """Lift the protective measures once the incident is genuinely fixed.
+
+        The circuit breaker has to close itself. A repair that leaves the scoring
+        job paused and the downstream assets flagged has not really finished —
+        and a human clearing them by hand every time is how people learn to
+        ignore the flags.
+        """
+        from agent.policy import AutonomyPolicy
+
+        return self.journal.undo_all(
+            incident_id, self.undo,
+            only=lambda a: AutonomyPolicy.is_protective(a.action_type),
+        )
 
     # --- fix & close ---------------------------------------------------- #
     def propose_fix(self, incident: Incident, context: ContextBundle,
                     root_cause: str) -> str:
         return self.codefix.propose_fix(incident, context, root_cause)
 
-    def write_back(self, post_mortem: PostMortem) -> None:
-        self.writeback.write_back(post_mortem, self.last_context)
+    def write_back(self, post_mortem: PostMortem, resolved: bool = True) -> None:
+        self.writeback.write_back(post_mortem, self.last_context, resolved=resolved)
 
 
 def _applies(check, asset_urn: str) -> bool:
