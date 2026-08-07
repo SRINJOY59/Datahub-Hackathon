@@ -8,12 +8,20 @@ from __future__ import annotations
 
 import duckdb
 
-from scenarios.base import Scenario
+from scenarios.base import DataScenario, Expectation
 
 
-class UnitBugScenario(Scenario):
+class UnitBugScenario(DataScenario):
     name = "unit_bug"
     description = "Upstream reports amounts in cents (100x unit bug)"
+
+    expectation = Expectation(
+        signal_type="assertion_failure",
+        change_type="scale_shift",
+        root_table="raw_transactions",
+        root_column="amount",
+        actions=["quarantine", "pin_feature", "tag_asset"],
+    )
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         clause = self.recent_clause(con)

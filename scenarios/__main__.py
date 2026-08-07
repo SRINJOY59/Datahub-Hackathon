@@ -1,9 +1,9 @@
-"""Run an incident scenario or reset the pipeline.
+"""Run an incident scenario, capture a baseline, or reset the pipeline.
 
     python -m scenarios list                 # list available scenarios
     python -m scenarios unit_bug             # inject the unit-bug incident
-    python -m scenarios null_spike           # inject the null-spike incident
     python -m scenarios reset                # restore a clean, healthy pipeline
+    python -m scenarios snapshot             # capture the last-known-good state
 
     add --no-reingest to skip the DataHub refresh (faster local iteration)
 """
@@ -11,46 +11,36 @@ from __future__ import annotations
 
 import argparse
 
-from scenarios.api_breaking_change import ApiBreakingChangeScenario
-from scenarios.base import Scenario
-from scenarios.distribution_drift import DistributionDriftScenario
-from scenarios.null_spike import NullSpikeScenario
-from scenarios.schema_change import SchemaChangeScenario
-from scenarios.training_regression import TrainingRegressionScenario
-from scenarios.unit_bug import UnitBugScenario
-
-SCENARIOS = {
-    s.name: s for s in (
-        UnitBugScenario,
-        NullSpikeScenario,
-        DistributionDriftScenario,
-        SchemaChangeScenario,
-        ApiBreakingChangeScenario,
-        TrainingRegressionScenario,
-    )
-}
+from scenarios import registry
+from scenarios.base import PipelineReset, capture_last_good
 
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="scenarios")
-    ap.add_argument("action", help="scenario name, 'reset', or 'list'")
+    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', or 'list'")
     ap.add_argument("--no-reingest", action="store_true")
     args = ap.parse_args()
 
     reingest_after = not args.no_reingest
 
     if args.action == "list":
-        for name, cls in SCENARIOS.items():
-            print(f"  {name:12s} {cls.description}")
+        for cls in registry.all_scenarios():
+            silent = "" if cls.expectation.trips_dbt_tests else "  [silent: dbt stays green]"
+            print(f"  {cls.name:22s} {cls.description}{silent}")
         return
     if args.action == "reset":
-        Scenario.reset(reingest_after=reingest_after)
+        PipelineReset().run(reingest_after=reingest_after)
         return
-    if args.action not in SCENARIOS:
-        raise SystemExit(f"unknown scenario '{args.action}'. "
-                         f"Options: {', '.join(SCENARIOS)}, reset, list")
+    if args.action == "snapshot":
+        capture_last_good()
+        return
 
-    SCENARIOS[args.action]().apply(reingest_after=reingest_after)
+    cls = registry.get(args.action)
+    if cls is None:
+        raise SystemExit(f"unknown scenario '{args.action}'. "
+                         f"Options: {', '.join(registry.names())}, reset, snapshot, list")
+
+    cls().apply(reingest_after=reingest_after)
 
 
 if __name__ == "__main__":

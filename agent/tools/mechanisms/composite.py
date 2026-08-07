@@ -15,6 +15,7 @@ from agent.contracts import (
     ContextBundle,
     Incident,
     Mechanisms,
+    MemoryStore,
     PostMortem,
     ValidationResult,
 )
@@ -31,10 +32,15 @@ import agent.tools.probes  # noqa: F401
 
 class RealMechanisms(Mechanisms):
     def __init__(self, gms_server: str = "http://localhost:8080",
-                 llm: Optional[LLMClient] = None) -> None:
+                 llm: Optional[LLMClient] = None,
+                 memory: Optional[MemoryStore] = None) -> None:
+        self.gms_server = gms_server
         self.context = DataHubContextTool(gms_server)
         self.detectors = build_detectors(gms_server)
         self.codefix = CodeFixTool(llm=llm)
+        # write_back records the post-mortem through this, so there is one write
+        # path into memory rather than the orchestrator writing separately.
+        self.memory = memory
         self._fake = FakeMechanisms()  # placeholder for not-yet-built tools
 
     # --- real ---

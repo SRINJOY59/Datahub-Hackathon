@@ -9,6 +9,7 @@ from __future__ import annotations
 import duckdb
 
 from agent.contracts import ChangeType, ColumnProfile
+from agent.tools.warehouse.duck import connect
 from ml.config import DUCKDB_PATH
 
 _NUMERIC = {"DOUBLE", "FLOAT", "REAL", "DECIMAL", "BIGINT", "INTEGER",
@@ -33,7 +34,7 @@ class ColumnProfiler:
         return None
 
     def numeric_columns(self, table: str) -> list[str]:
-        con = duckdb.connect(self.path, read_only=True)
+        con = connect(self.path, read_only=True)
         try:
             return [c for c, dt in self._cols(con, table)
                     if dt.upper().split("(")[0] in _NUMERIC]
@@ -41,7 +42,7 @@ class ColumnProfiler:
             con.close()
 
     def profile_column(self, table: str, column: str) -> ColumnProfile:
-        con = duckdb.connect(self.path, read_only=True)
+        con = connect(self.path, read_only=True)
         try:
             cols = self._cols(con, table)
             if column not in [c for c, _ in cols]:

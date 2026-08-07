@@ -42,8 +42,9 @@ def main() -> None:
         from agent.tools.mechanisms.composite import RealMechanisms
         from memory.base import get_memory
 
-        mechanisms = RealMechanisms(llm=llm)  # llm powers the CodeFixTool
         memory = get_memory()  # DataHub-backed incident memory
+        # llm powers the CodeFixTool; memory is where write_back records
+        mechanisms = RealMechanisms(llm=llm, memory=memory)
 
     SentinelAgent(mechanisms, llm=llm, memory=memory).run()
 

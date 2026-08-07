@@ -7,12 +7,21 @@ migration PR — applying the change instead of just announcing it.
 """
 from __future__ import annotations
 
-from scenarios.base import AdvisoryScenario
+from scenarios.base import AdvisoryScenario, Expectation
 
 
 class ApiBreakingChangeScenario(AdvisoryScenario):
     name = "api_breaking_change"
     description = "Vendor ships a breaking scikit-learn API change"
+
+    expectation = Expectation(
+        signal_type="dependency_change",
+        change_type="dependency_change",
+        actions=[],                  # remediation is a fix PR, not a data action
+        checks_pass_after_act=True,
+        trips_dbt_tests=False,       # the warehouse is fine; the code is not
+        note="Remediation is an LLM-generated migration diff, not a rollback.",
+    )
 
     advisory = {
         "package": "scikit-learn",
