@@ -219,6 +219,7 @@ class PipelineReset:
 
     def run(self, reingest_after: bool = True) -> bool:
         self._cleanup_scenarios()
+        self._clear_agent_state()
 
         n = clear_advisories()
         if n:
@@ -254,6 +255,26 @@ class PipelineReset:
                 cls().cleanup()
             except Exception as e:  # a scenario's cleanup must not block the reset
                 print(f"[reset] cleanup for {cls.name} failed: {type(e).__name__}: {e}")
+
+    @staticmethod
+    def _clear_agent_state() -> None:
+        """Release anything the agent left holding the pipeline open, and discard
+        per-incident restore points. A breaker that outlives its incident would
+        silently keep the scoring job down; stale `pre_*` snapshots would pile up
+        one per action forever."""
+        try:
+            from agent.tools.actuators.pause_job import clear_all
+            from agent.tools.warehouse.snapshots import SnapshotStore
+        except ImportError:
+            return
+
+        n = clear_all()
+        if n:
+            print(f"[reset] closed {n} open circuit breaker(s)")
+
+        dropped = SnapshotStore().drop_incident_snapshots()
+        if dropped:
+            print(f"[reset] discarded {dropped} per-incident restore point(s)")
 
     @staticmethod
     def _capture_last_good() -> None:

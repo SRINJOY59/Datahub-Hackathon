@@ -28,10 +28,23 @@ is signed off.
 | Phase | Scope | Status |
 |---|---|---|
 | **0** | Structural repairs + foundation modules (behaviour-neutral) | ✅ |
-| **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ⬜ |
+| **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
 | **2** | Six new threat classes (detectors, probes, scenarios) | ⬜ |
 | **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ⬜ |
 | **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ⬜ |
+| **5** | *(optional)* Intelligence-plane remainder: #6 Comms, #7 Cost Meter, #12 Ask-the-On-Call, git-commit detector | not scheduled |
+
+### Who each phase serves
+
+| Phase | Srinjoy (Mechanism) | Arkajyoti (Intelligence) |
+|---|---|---|
+| 0 | contract, registries, journal, snapshots, dbt/model/git readers | `ActionJournal` for #8; `source_file_for()` for #2; RCA enum-parity fix |
+| 1 | `run_checks`, `act`/`undo`, `write_back`, planner + policy, **#1**, **#4** | **#5** post-mortems on the model card + precedent recall |
+| 2 | 6 detectors + probes; RCA signal→change-type map | RCA prompt quality; richer `PostMortem` corpus for #10 |
+| 3 | **#2** Drift Attribution, **#3** Parallel Universe, **#11** `inject_failure()` | **#8** Shadow Mode, **#9** Trust Badges, **#10** Runbook→Skill |
+| 4 | scenario expectation harness | **#11** fire-drill orchestration via `verify --all` |
+
+Neither plane waits on the other: every phase moves both.
 
 ### Phase 0 — what landed
 
@@ -61,6 +74,51 @@ This phase built the machinery Phase 1 actuates with.*
 Contract additions were strictly additive: `SignalType` 7→10, `ChangeType` 9→15,
 `ActionType` 5→6, plus `ShadowResult`, `TrustScore`, and the `Actuator` /
 `CheckRunner` Protocols. No existing field renamed or removed.
+
+### Phase 1 — what landed
+
+*The agent now does what it says it does. `RealMechanisms` no longer delegates
+anything to `FakeMechanisms`.*
+
+**Six actuators**, each with a working inverse (`agent/tools/actuators/`):
+
+| Actuator | Real effect | Inverse |
+|---|---|---|
+| `pin_feature` | restores a table from `last_good`, rebuilds downstream | restore the pre-action snapshot |
+| `quarantine` | moves rows outside the healthy range into `sentinel_quarantine.<table>__<incident>` | restore the pre-action snapshot |
+| `dedupe_partition` | drops duplicate keys, keeping first arrival | restore the pre-action snapshot |
+| `repoint_model` | moves the MLflow `champion` alias to the newest *validated* healthy version | point it back |
+| `tag_asset` | adds `Sentinel-Degraded` to downstream assets in DataHub | remove it |
+| `pause_job` | opens a breaker file; **`ml/score.py` refuses to score while it is open** | close it |
+
+**Three validation checks**, ANDed (`agent/tools/checks/`): `dbt_tests` (real
+assertion results by name), `model_eval` (champion inside a *bounded* metric band
+— too high is leakage, not success), and `data_invariants` (volume and freshness
+against the recorded baseline, which is the only thing that can see a stale feed
+or a collapsed batch, since dbt stays green through both).
+
+**Decision-making extracted from the loop:** `agent/policy.py` and
+`agent/planner.py`. The planner is a `ChangeType → recipe` table, so what the
+agent will do about a null spike is readable without reading the code that does
+it. The policy finally has teeth — `HUMAN_ONLY` now genuinely blocks mutating
+actions instead of only adding a PR.
+
+The autonomy model splits actions by what they touch. **Protective** actions
+(tag, pause) only ever reduce harm, so they run at every tier — withholding them
+while waiting for a human is itself the risky choice. **Mutating** actions (pin,
+quarantine, dedupe, repoint) change data or what is serving, and need confidence
+behind them. `PII` plus a diagnosis below high confidence is the one combination
+that drops to protective-only.
+
+**Two bugs found by verification, not by review:**
+
+- Both warehouse actuators in one plan snapshotted the same restore label, so the
+  second silently overwrote the first's way back. A rollback would have restored
+  an intermediate state and lost the quarantined rows. Restore points are now per
+  *action*, not per incident.
+- `python -m ml.score` crashed with `UnicodeEncodeError` whenever its output was
+  piped, because Windows selects cp1252 for redirected stdout. Fixed at the entry
+  points (`agent/console.py`) rather than by avoiding punctuation.
 
 ---
 
@@ -97,36 +155,57 @@ plus the mechanism-side features.
 
 ### Core tools (the contract)
 
-| Fn / Tool | Feature | Status |
-|---|---|---|
-| `detect_incidents()` | multi-detector registry: assertions + dependency + training | ✅ |
-| `read_context()` | real lineage / schema / tags / owners | ✅ |
-| `run_checks()` | real dbt test / assertion re-run (validation gate) | 🔨 `DbtRunner.test()` lands Phase 0; wired Phase 1 |
-| `act()` / `undo()` | **#1 Time Machine** — MLflow stage swap + feature pin, journaled with inverses | 🔨 journal + snapshots + registry reads land Phase 0; actuators Phase 1 |
-| `write_back()` | **#4 Circuit Breaker** — open incident, tag downstream "degraded", auto-restore | ⬜ Phase 1 |
-| `propose_fix()` | **CodeFixTool** — LLM-generated migration diff + draft PR | ✅ |
-| `inject_failure()` | **#11 Fire Drill** — declared on the contract Phase 0 | ⬜ Phase 3 |
-| `shadow_validate()` | **#3 Parallel Universe** — declared on the contract Phase 0 | ⬜ Phase 3 |
+| Fn / Tool | Feature | Phase | Status |
+|---|---|---|---|
+| `detect_incidents()` | multi-detector registry: assertions + dependency + training | pre-phase | ✅ |
+| `read_context()` | real lineage / schema / tags / owners | pre-phase | ✅ |
+| `run_checks()` | real dbt test / model eval / data invariants, ANDed | **1** | ✅ |
+| `act()` / `undo()` | **#1 Time Machine** — 6 actuators, every one journaled with its inverse | **1** | ✅ |
+| `write_back()` | **#4 Circuit Breaker** — post-mortem to asset + model card, degraded tags auto-cleared | **1** | ✅ |
+| `propose_fix()` | **CodeFixTool** — LLM-generated migration diff + draft PR | pre-phase | ✅ |
+| `inject_failure()` | **#11 Fire Drill** — declared on the contract Phase 0 | **3** | ⬜ |
+| `shadow_validate()` | **#3 Parallel Universe** — declared on the contract Phase 0 | **3** | ⬜ |
 
-**Known gap this exposes:** until Phase 1 lands, `RealMechanisms` still delegates
-`run_checks` / `act` / `undo` / `write_back` to `FakeMechanisms`, whose `act()`
-sets a flag that its own `run_checks()` then reads. A live run therefore reports
-a mitigation it never performed, and the rollback branch is unreachable. This is
-the single most important thing Phase 1 fixes.
+**Contract coverage: 6/8 complete, 2 scheduled — 8/8 by end of Phase 3.**
+
+**Verified against live DataHub, not asserted:** on a `unit_bug` incident the
+agent quarantined 1074 real rows, restored `raw_transactions` from 6926 back to
+8000, tagged 2 downstream assets, and passed a 29-check gate. Rolling the
+incident back returned the table to fingerprint
+`8000:74032610348716427358176` — byte-for-byte the poisoned state recorded before
+the run — and the assertions failed again, which is the proof the mitigation had
+been real. On `training_regression` the champion alias moved v2 → v1.
 
 ### Mechanism-side features
 
-| # | Feature | Status |
-|---|---|---|
-| 1 | **Time Machine** — one-click reversible rollback (via `act`/`undo`) | 🔨 Phase 1 |
-| 4 | **Smart Circuit Breaker** — tag/quarantine downstream + auto-restore | ⬜ Phase 1 |
-| 2 | **Drift Attribution** — walk lineage upstream, correlate to the breaking commit | 🔨 `GitHistory` + inverse producer map land Phase 0; probe Phase 3 |
-| 3 | **Parallel Universe / Shadow Scoring** — apply fix in a clone, diff before/after as PR proof | ⬜ Phase 3 |
-| 11 | **Fire Drill** — `inject_failure()` mechanism | ⬜ Phase 3 |
+| # | Feature | Phase | Status |
+|---|---|---|---|
+| 1 | **Time Machine** — one-click reversible rollback (via `act`/`undo`) | **1** | ✅ |
+| 4 | **Smart Circuit Breaker** — tag/quarantine downstream + auto-restore | **1** | ✅ |
+| 2 | **Drift Attribution** — walk lineage upstream, correlate to the breaking commit | **3** | 🔨 `GitHistory` + inverse producer map landed Phase 0; probe in Phase 3 |
+| 3 | **Parallel Universe / Shadow Scoring** — apply fix in a clone, diff before/after as PR proof | **3** | ⬜ |
+| 11 | **Fire Drill** — `inject_failure()` mechanism | **3** | ⬜ |
+
+**Mechanism-side features: 2/5 complete, 3 scheduled — 5/5 by end of Phase 3.**
 
 Build order: `run_checks` → **Time Machine** → **Circuit Breaker** →
-**Drift Attribution** → Parallel Universe. All five are now in the phase plan
-rather than cut from the bottom.
+**Drift Attribution** → Parallel Universe. All five are in the phase plan rather
+than cut from the bottom.
+
+### Detector coverage (the incident classes)
+
+| Class | Phase | Status |
+|---|---|---|
+| Data (assertion + profiling) | pre-phase | ✅ |
+| Dependency / API break | pre-phase | ✅ |
+| ML training regression | pre-phase | ✅ |
+| Model drift | **2** | ⬜ |
+| Freshness / SLA | **2** | ⬜ |
+| Volume anomaly | **2** | ⬜ |
+| Label leakage | **2** | ⬜ |
+| Duplicate records | **2** | ⬜ (reuses the assertion detector; new probe + remediation) |
+| Training/serving skew | **2** | ⬜ |
+| **Git-commit-as-signal** | **not scheduled** | ⬜ — see Not scheduled below |
 
 ---
 
@@ -135,22 +214,36 @@ rather than cut from the bottom.
 Consumes `Incident`, `ContextBundle`, and `PostMortem` through the contract.
 Builds entirely against `fakes.py` until Srinjoy's real tools land — no blocking.
 
-| # | Feature | What it needs from the contract | Status |
-|---|---|---|---|
-| 5 | **Organizational Memory** — post-mortems embedded on the model card; incident #2 resolves faster by citing #1 | `PostMortem` objects the loop emits | 🔨 model-card write lands Phase 1 |
-| 6 | **Audience-Aware Comms** — one incident → 3 tailored messages (ML eng / data scientist / product) | `ContextBundle.owners`, `tags` | ⬜ **unblocked** |
-| 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage ("~$12K exposure") | `ContextBundle.downstream` + usage stats | ⬜ **unblocked** |
-| 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | ⬜ **unblocked** — `ActionJournal` exists (Phase 0); `record_simulated()` is the shadow-mode hook |
-| 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | ⬜ Phase 3 |
-| 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Srinjoy wires Skill registration | ⬜ |
-| 12 | **Ask the On-Call** — chat over incident memory | Memory (#5) | ⬜ |
-| — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | 🔨 |
-| 11 | **Fire Drill orchestration** — drive Srinjoy's `inject_failure()` to prove self-healing (stretch) | `inject_failure()` | ⬜ |
+| # | Feature | What it needs from the contract | Phase | Status |
+|---|---|---|---|---|
+| 5 | **Organizational Memory** — post-mortems embedded on the model card; incident #2 resolves faster by citing #1 | `PostMortem` objects the loop emits | **1** | ✅ recall + precedent citation working; model-card write landed Phase 1 |
+| 8 | **Shadow Mode + Savings Digest** — "this week I *would have* resolved N incidents, saved M hours" | the action journal | **3** | ⬜ `ActionJournal.record_simulated()` is the hook (Phase 0) |
+| 9 | **Trust Badges** — live model-health score written onto assets in DataHub | calls Srinjoy's `write_back` helper | **3** | ⬜ helper exists (Phase 1) |
+| 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Skill registration | **3** | ⬜ |
+| 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ⬜ `scenarios verify --all` is the orchestration |
+| — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | **0 + 2** | 🔨 enum-parity fix landed Phase 0; signal→change-type map in Phase 2 |
+| 6 | **Audience-Aware Comms** — one incident → 3 tailored messages | `ContextBundle.owners`, `tags` | **not scheduled** | ⬜ unblocked, not built |
+| 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage | `ContextBundle.downstream` + usage stats | **not scheduled** | ⬜ unblocked, not built |
+| 12 | **Ask the On-Call** — chat over incident memory | Memory (#5) | **not scheduled** | ⬜ unblocked, not built |
 
-Priority: **Memory (#5) first** — it's the moat, and #10 and #12 depend on it.
-Then Comms (#6), Cost Meter (#7), Trust Badges (#9). Shadow Digest (#8) and
-Ask-the-On-Call (#12) are first cuts. Skill synthesis (#10) never gets cut — it's
-the OSS tiebreaker.
+**Intelligence-plane coverage: 1/9 complete, 5 scheduled, 3 not scheduled —
+6/9 by end of Phase 4.**
+
+### Not scheduled — and why
+
+Four items sit outside the current phase plan. This is a scope decision, not an
+oversight, and each is genuinely unblocked: the contract surface it needs already
+exists and is exercised by working code.
+
+| Item | What it would need | Why it is unblocked today |
+|---|---|---|
+| #6 Audience-Aware Comms | a formatter over an incident + its owners | `ContextBundle.owners` / `tags` are real; `PostMortem` carries the narrative and blast radius |
+| #7 Cost-of-Incident Meter | blast radius × a usage/cost model | `ContextBundle.downstream` is real; `ActionJournal` timestamps give incident duration |
+| #12 Ask the On-Call | a chat loop over recalled post-mortems | `MemoryStore.recall()` works and already returns cited precedent |
+| Git-commit-as-signal detector | a `@detector` reading recent commits to pipeline sources | `GitHistory` (Phase 0) + `CodebaseMemory.source_file_for()` (Phase 0) do the reading; only the detector wrapper is missing |
+
+Adding them would be a **Phase 5**. Each is small precisely because the phases
+below built the surfaces they consume.
 
 ---
 
@@ -186,15 +279,17 @@ Status: ✅ done · 🔨 partial · ⬜ not started
 The intelligence is real; the *actions* are still stubbed. This is what converts
 "an agent that explains" into "an agent that fixes."
 
-- ⭐ **Time Machine** ⬜ — real reversible mitigations: MLflow champion repoint to
-  last-good version, feature-table pinning to a snapshot, view-swap. Every action
-  journaled with its inverse.
-- ⭐ **Validation gate** ⬜ — real `run_checks` (re-run dbt tests / model eval) after
-  a fix; **auto-rollback via the journal if it fails**. This closed loop is the
-  core safety story.
-- ⭐ **Circuit Breaker** ⬜ — tag downstream assets "do-not-trust" in DataHub, pause
-  dependent jobs (Airflow/Dagster), auto-restore on resolution.
-- **Quarantine / backfill** ⬜ — isolate a bad partition; trigger a corrected backfill.
+- ⭐ **Time Machine** ✅ — MLflow champion repoint to the last *validated* version,
+  table pinning to a snapshot, quarantine, dedupe. Every action journaled with its
+  inverse; rollback verified exact by content fingerprint.
+- ⭐ **Validation gate** ✅ — real `run_checks` (dbt tests + model eval + data
+  invariants) after a fix, with **auto-rollback via the journal if it fails**.
+  The closed loop is the core safety story and it is now genuinely closed.
+- ⭐ **Circuit Breaker** ✅ — downstream assets tagged `Sentinel-Degraded` in
+  DataHub and the scoring job paused via a breaker `ml/score.py` honours; both
+  auto-restored on resolution. Airflow/Dagster pausing is still ⬜.
+- **Quarantine / backfill** 🔨 — bad rows are isolated into a `sentinel_quarantine`
+  table named for the incident; triggering a corrected backfill is still ⬜.
 - **Real multi-file / multi-repo PRs** 🔨 — CodeFixTool opens single-file PRs today;
   extend to multi-file migrations, run the test suite on the fix, and scan across
   many repos in an org.
@@ -234,8 +329,9 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 - **MTTR / learning analytics** ⬜ — track resolution time trending down as memory grows.
 
 ## 5. Autonomy, policy & governance
-- **Tiered autonomy** 🔨 — tag-driven auto / PR-only / human today; expand with
-  blast-radius- and confidence-based gating.
+- **Tiered autonomy** ✅ — tags, RCA confidence and blast radius decide the tier,
+  and the tier genuinely gates what runs: protective actions at every tier,
+  mutating actions withheld under `HUMAN_ONLY`.
 - ⭐ **Shadow mode + savings digest** ⬜ — propose-only mode with "would have resolved
   N incidents, saved M hours" — the enterprise adoption on-ramp.
 - **Human-in-the-loop approvals** ⬜ — approve/deny an action from Slack.

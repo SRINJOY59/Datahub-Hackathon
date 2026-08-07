@@ -16,6 +16,13 @@ from scenarios.base import PipelineReset, capture_last_good
 
 
 def main() -> None:
+    try:
+        from agent.console import enable_utf8
+
+        enable_utf8()
+    except ImportError:
+        pass
+
     ap = argparse.ArgumentParser(prog="scenarios")
     ap.add_argument("action", help="scenario name, 'reset', 'snapshot', or 'list'")
     ap.add_argument("--no-reingest", action="store_true")

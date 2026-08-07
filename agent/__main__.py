@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 
+from agent.console import enable_utf8
 from agent.llm import LLMClient
 from agent.orchestrator import SentinelAgent
 
 
 def main() -> None:
+    enable_utf8()
     try:
         from dotenv import load_dotenv
 

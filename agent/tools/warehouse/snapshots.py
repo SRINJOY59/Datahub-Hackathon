@@ -175,6 +175,36 @@ class SnapshotStore:
     def drop_label(self, label: str) -> int:
         return sum(1 for t in self.labelled_tables(label) if self.drop(t, label))
 
+    def drop_incident_snapshots(self) -> int:
+        """Discard every per-action restore point, keeping the `last_good`
+        baseline. Called when the pipeline is reset: those snapshots exist to
+        undo a specific incident, and once the world has been rebuilt from seed
+        they describe a history that no longer happened."""
+        con = self._connect()
+        try:
+            rows = con.execute(
+                "select table_name from information_schema.tables "
+                "where table_schema = ?", [SNAP_SCHEMA],
+            ).fetchall()
+        except duckdb.Error:
+            return 0
+        finally:
+            con.close()
+
+        stale = [r[0] for r in rows if "__pre_" in r[0]]
+        con = self._connect()
+        dropped = 0
+        try:
+            for name in stale:
+                try:
+                    con.execute(f'drop table if exists {SNAP_SCHEMA}."{name}"')
+                    dropped += 1
+                except duckdb.Error:
+                    continue
+        finally:
+            con.close()
+        return dropped
+
     def fingerprint(self, table: str) -> str:
         """A cheap content hash, used to prove an undo really restored state."""
         con = self._connect(read_only=True)

@@ -1,10 +1,20 @@
-"""Composite Mechanisms wiring real tools where they exist and falling back to
-fakes for the rest — so the agent runs end-to-end while tools are built one at a
-time.
+"""The real mechanism bundle — everything the agent can physically do.
 
-Currently real:  detect_incidents (all registered detectors), read_context,
-                 propose_fix (CodeFixTool).
-Still faked:      run_checks, act, undo, write_back.
+Each verb delegates to a registered plugin rather than implementing anything
+itself, so adding a mitigation or a validation source never touches this file:
+
+    detect_incidents  -> every registered Detector
+    read_context      -> DataHub graph
+    run_checks        -> every applicable CheckRunner, ANDed
+    act / undo        -> the Actuator registered for that ActionType
+    propose_fix       -> CodeFixTool
+    write_back        -> DataHubWriteBack (+ the injected MemoryStore)
+
+`act` never lets an actuator's failure look like success: an action that raises
+is journaled as failed and returned with no inverse, so the caller can see that
+the mitigation is incomplete and let the validation gate decide what to do about
+it. That honesty is the whole point — the previous implementation reported
+mitigations it had not performed.
 """
 from __future__ import annotations
 
@@ -19,13 +29,16 @@ from agent.contracts import (
     PostMortem,
     ValidationResult,
 )
+from agent.journal import ActionJournal
 from agent.llm import LLMClient
-from agent.registry import build_detectors
+from agent.registry import build_actuators, build_checks, build_detectors
 from agent.tools.codefix.generator import CodeFixTool
 from agent.tools.graph.context import DataHubContextTool
-from agent.tools.mechanisms.fakes import FakeMechanisms
+from agent.tools.graph.writeback import DataHubWriteBack
 
-# import plugin packages so detectors/probes register
+# import plugin packages so their decorators register
+import agent.tools.actuators  # noqa: F401
+import agent.tools.checks  # noqa: F401
 import agent.tools.detectors  # noqa: F401
 import agent.tools.probes  # noqa: F401
 
@@ -33,42 +46,110 @@ import agent.tools.probes  # noqa: F401
 class RealMechanisms(Mechanisms):
     def __init__(self, gms_server: str = "http://localhost:8080",
                  llm: Optional[LLMClient] = None,
-                 memory: Optional[MemoryStore] = None) -> None:
+                 memory: Optional[MemoryStore] = None,
+                 journal: Optional[ActionJournal] = None) -> None:
         self.gms_server = gms_server
         self.context = DataHubContextTool(gms_server)
         self.detectors = build_detectors(gms_server)
+        self.checks = build_checks(gms_server)
+        self.actuators = build_actuators(gms_server)
         self.codefix = CodeFixTool(llm=llm)
-        # write_back records the post-mortem through this, so there is one write
-        # path into memory rather than the orchestrator writing separately.
         self.memory = memory
-        self._fake = FakeMechanisms()  # placeholder for not-yet-built tools
+        self.journal = journal or ActionJournal()
+        self.writeback = DataHubWriteBack(gms_server, memory=memory)
+        # set by the orchestrator so write_back can reach downstream assets
+        self.last_context: Optional[ContextBundle] = None
 
-    # --- real ---
+    # --- detection & context ------------------------------------------- #
     def detect_incidents(self) -> list[Incident]:
         incidents: list[Incident] = []
         for d in self.detectors:
             try:
                 incidents.extend(d.detect())
-            except Exception:  # a flaky detector must not sink the run
-                pass
+            except Exception as e:
+                print(f"  [detect   ] detector {d.name} failed: "
+                      f"{type(e).__name__}: {e}")
         return incidents
 
     def read_context(self, asset_urn: str) -> ContextBundle:
-        return self.context.read_context(asset_urn)
+        ctx = self.context.read_context(asset_urn)
+        self.last_context = ctx
+        return ctx
 
+    # --- validation gate ------------------------------------------------ #
+    def run_checks(self, asset_urn: str) -> ValidationResult:
+        """Run every check that applies and AND the verdicts.
+
+        More than one has to agree, because they see different things: dbt tests
+        catch broken values, the model check catches a bad champion, and the
+        invariant check catches the failures that leave both of those green.
+        """
+        applicable = [c for c in self.checks if _applies(c, asset_urn)]
+        if not applicable:
+            return ValidationResult(
+                passed=False, checks_run=[],
+                failures=[f"no validation check covers {asset_urn} — refusing to "
+                          f"certify a mitigation nothing verified"],
+            )
+
+        checks_run: list[str] = []
+        failures: list[str] = []
+        for c in applicable:
+            try:
+                result = c.run(asset_urn)
+            except Exception as e:
+                failures.append(f"{c.name}: check errored ({type(e).__name__}: {e})")
+                continue
+            checks_run.extend(result.checks_run or [c.name])
+            failures.extend(result.failures)
+
+        return ValidationResult(passed=not failures, checks_run=checks_run,
+                                failures=failures)
+
+    # --- act / undo ----------------------------------------------------- #
+    def act(self, action: ActionRecord) -> ActionRecord:
+        actuator = self.actuators.get(action.action_type)
+        if actuator is None:
+            action.status = "failed"
+            self.journal.record_failed(action, action.incident_id,
+                                       "no actuator registered")
+            return action
+        try:
+            applied = actuator.apply(action)
+        except Exception as e:
+            action.status = "failed"
+            action.inverse = None
+            self.journal.record_failed(action, action.incident_id,
+                                       f"{type(e).__name__}: {e}")
+            return action
+        return self.journal.record_applied(applied, applied.incident_id)
+
+    def undo(self, action: ActionRecord) -> bool:
+        actuator = self.actuators.get(action.action_type)
+        if actuator is None:
+            return False
+        try:
+            return actuator.revert(action)
+        except Exception as e:
+            print(f"  [rollback ] {action.action_type.value} on "
+                  f"{action.target}: {type(e).__name__}: {e}")
+            return False
+
+    def rollback(self, incident_id: str) -> tuple[int, int]:
+        """Undo everything still applied for an incident, newest first."""
+        return self.journal.undo_all(incident_id, self.undo)
+
+    # --- fix & close ---------------------------------------------------- #
     def propose_fix(self, incident: Incident, context: ContextBundle,
                     root_cause: str) -> str:
         return self.codefix.propose_fix(incident, context, root_cause)
 
-    # --- still faked ---
-    def run_checks(self, asset_urn: str) -> ValidationResult:
-        return self._fake.run_checks(asset_urn)
-
-    def act(self, action: ActionRecord) -> ActionRecord:
-        return self._fake.act(action)
-
-    def undo(self, action: ActionRecord) -> bool:
-        return self._fake.undo(action)
-
     def write_back(self, post_mortem: PostMortem) -> None:
-        return self._fake.write_back(post_mortem)
+        self.writeback.write_back(post_mortem, self.last_context)
+
+
+def _applies(check, asset_urn: str) -> bool:
+    try:
+        return bool(check.applies_to(asset_urn))
+    except Exception:
+        return False

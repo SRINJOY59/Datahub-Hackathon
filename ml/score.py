@@ -35,6 +35,20 @@ from ml.drift import compute_drift
 BASELINE_PATH = REPO_ROOT / "ml" / "baseline.json"
 SNAPSHOT_PATH = REPO_ROOT / "ml" / "last_scoring_snapshot.json"
 
+SCORING_JOB = "fraud_scoring_api"
+
+
+def check_breaker() -> dict | None:
+    """The agent can pause this job when it believes the features feeding it are
+    bad. Honouring that here is what makes PAUSE_JOB a real mitigation rather
+    than a note in a log: scoring on known-bad data is exactly the harm the
+    circuit breaker exists to prevent."""
+    try:
+        from agent.tools.actuators.pause_job import is_paused
+    except ImportError:
+        return None
+    return is_paused(SCORING_JOB)
+
 
 def load_features() -> pd.DataFrame:
     con = duckdb.connect(str(DUCKDB_PATH), read_only=True)
@@ -63,6 +77,23 @@ def score() -> dict:
 
 
 def main() -> None:
+    try:
+        from agent.console import enable_utf8
+
+        enable_utf8()
+    except ImportError:
+        pass
+
+    breaker = check_breaker()
+    if breaker:
+        print(f"SCORING PAUSED — circuit breaker open on {SCORING_JOB}")
+        print(f"  incident : {breaker.get('incident_id') or 'unknown'}")
+        print(f"  reason   : {breaker.get('reason')}")
+        print(f"  opened   : {breaker.get('opened_at')}")
+        print("\nThe agent closes this automatically when the incident resolves.")
+        print("To clear it by hand: python -m scenarios reset")
+        raise SystemExit(2)
+
     snap = score()
     SNAPSHOT_PATH.write_text(json.dumps(snap, indent=2))
 

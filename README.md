@@ -165,8 +165,15 @@ python -m scenarios reset
 
 Expect: the agent detects the failed assertion, profiles upstream tables, and
 pins `raw_transactions.amount` as a `scale_shift` with real numbers (recent vs
-historical mean) at high confidence. Try `null_spike`, `distribution_drift`
-(subtle — no hard violation), and `schema_change` the same way.
+historical mean) at high confidence — then **quarantines the offending rows,
+restores the table from the last-good snapshot, tags the downstream assets, and
+re-runs the assertions to confirm it worked.** Try `null_spike`,
+`distribution_drift` (subtle — no hard violation), and `schema_change` the same
+way.
+
+What counts as an "offending row" comes from the last-good snapshot, not from any
+knowledge of how the data was broken: a value outside the range ever seen while
+the pipeline was healthy is one the pipeline was never built to handle.
 
 ### Dependency / API breaking change ("self-maintaining APIs")
 
@@ -190,7 +197,12 @@ python -m scenarios reset                  # restores the champion automatically
 ```
 
 Expect: the agent reads the champion's MLflow metrics, flags the `roc_auc`
-regression below threshold, and root-causes it.
+regression below threshold, root-causes it, and **moves the `champion` alias back
+to the last validated version.** Confirm with:
+
+```bash
+python -c "from agent.tools.warehouse.champion import ChampionMetrics as C; v=C().current(); print('champion v'+v.version, round(v.roc_auc,4))"
+```
 
 The bad model version is deliberately **not** tagged `validation_status=passed`,
 which is how the rollback tells a version worth returning to from one that
@@ -203,12 +215,47 @@ version, so `python -m ml.train` is no longer needed to recover.
   fallback instead of the LLM narrative.
 - **Offline smoke test:** `python -m agent --fake` runs the full loop on canned
   data with no DataHub or LLM key.
-- **What's real vs stubbed:** detection, context, RCA, memory, and fix generation
-  are real. The mitigation actuators (`act`/`undo` rollback, circuit breaker,
-  post-mortem write-back) are still stubs, so today's run reports a mitigation it
-  did not actually perform — the machinery they need (snapshots, action journal,
-  dbt test parsing, model registry reads) is in place as of Phase 0 and is wired
-  up in Phase 1. See `TASK_DISTRIBUTION.md`.
+- **What's real:** detection, context, RCA, memory, fix generation **and the
+  mitigations**. The agent moves rows, restores tables, repoints the MLflow
+  champion, tags assets in DataHub and opens circuit breakers — all journaled
+  with a working inverse. Still stubbed: the fire drill and shadow validation
+  (`inject_failure`, `shadow_validate`). See `TASK_DISTRIBUTION.md`.
+
+---
+
+## What the agent actually does to your system
+
+Every mitigation is real and every one of them is reversible. When the agent
+acts, it writes what it did *and how to undo it* to `.sentinel/journal.jsonl`
+before the action takes effect, so a rollback never depends on the agent still
+being alive.
+
+| Action | What changes on disk / in DataHub |
+|---|---|
+| `quarantine` | rows outside the healthy range move to `sentinel_quarantine.<table>__<incident>` |
+| `pin_feature` | the table is restored from the `last_good` snapshot, then dbt rebuilds downstream |
+| `dedupe_partition` | duplicate keys are dropped, first arrival kept |
+| `repoint_model` | the MLflow `champion` alias moves to the newest **validated** healthy version |
+| `tag_asset` | downstream assets get `Sentinel-Degraded` in DataHub |
+| `pause_job` | a breaker opens and **`python -m ml.score` refuses to run** |
+
+Then the validation gate runs — dbt assertions, model metrics, and the volume /
+freshness invariants — and **if it fails, everything is rolled back through the
+journal automatically** and the owners are paged. Nothing is reported as resolved
+that a check did not independently confirm.
+
+### How much it is allowed to do on its own
+
+Actions split by what they touch. *Protective* ones (tag, pause) only reduce
+harm, so they run at every tier — withholding them while waiting for a human is
+itself the risky choice. *Mutating* ones (pin, quarantine, dedupe, repoint)
+change data or what is serving.
+
+| Tier | Trigger | Behaviour |
+|---|---|---|
+| `auto` | no sensitive tags, high confidence, small blast radius | acts, no PR needed |
+| `pr_only` | `Tier-Critical` / `PII` / low confidence / wide blast radius | mitigates now, opens a fix for review |
+| `human_only` | `PII` **and** confidence below high | protective actions only, pages the owners |
 
 ---
 
@@ -222,13 +269,22 @@ to delete — you lose the rollback history, not the pipeline.
 | `.sentinel/baselines.json` | the pipeline's healthy shape; how silent failures (stale feed, volume collapse) are detected at all |
 | `.sentinel/advisories/*.json` | published vendor advisories awaiting the dependency detector |
 | `.sentinel/journal.jsonl` | every action taken and the inverse that undoes it (audit log + rollback source) |
+| `.sentinel/breakers/*.json` | open circuit breakers; `ml/score.py` refuses to run while one exists |
 | `sentinel_snap` schema in `fraud.duckdb` | point-in-time table copies the Time Machine restores from |
+| `sentinel_quarantine` schema in `fraud.duckdb` | rows isolated from a bad batch, kept per incident for inspection |
 
 Inspect them any time:
 
 ```bash
+cat .sentinel/journal.jsonl        # what the agent did, and how to undo it
 cat .sentinel/baselines.json
 python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print(S().labelled_tables('last_good'))"
+```
+
+Roll an incident back by hand — the same path the failed-validation branch takes:
+
+```bash
+python -c "from agent.tools.mechanisms.composite import RealMechanisms; print(RealMechanisms().rollback('INC-1234'))"
 ```
 
 ---
@@ -262,6 +318,39 @@ python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; d=D(); d
 ```
 
 The two fingerprints must match, and the final line must print `True`.
+
+## Proving the mitigations are real
+
+The point of the loop is that it changes things and can change them back. This
+sequence proves both, and is the honest test of whether the agent works:
+
+```bash
+python -m scenarios reset                 # clean, and capture last-good
+python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print('poison-free:', S().fingerprint('raw_transactions'))"
+
+python -m scenarios unit_bug              # break it
+python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print('poisoned  :', S().fingerprint('raw_transactions'))"
+
+python -m agent                           # detect -> RCA -> quarantine + pin + tag -> validate
+cat .sentinel/journal.jsonl                # every action, with its inverse
+
+# now undo everything the agent did, and confirm the break comes back
+python -c "from agent.tools.mechanisms.composite import RealMechanisms as R; from agent.journal import ActionJournal as J; inc=J().entries()[0].incident_id; print(R().rollback(inc))"
+python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print('rolled back:', S().fingerprint('raw_transactions'))"
+python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; d=D(); d.run(quiet=True); print('assertions:', d.test().ok)"
+```
+
+The `rolled back` fingerprint must equal the `poisoned` one, and the assertions
+must print `False` — the pipeline is broken again, which is what proves the fix
+had been real rather than reported.
+
+Check the circuit breaker independently:
+
+```bash
+python -m scenarios training_regression && python -m agent    # champion v2 -> v1
+python -c "from agent.tools.warehouse.champion import ChampionMetrics as C; v=C().current(); print('champion v'+v.version, v.roc_auc)"
+python -m ml.score                        # runs; add a breaker and it refuses
+```
 
 ---
 
