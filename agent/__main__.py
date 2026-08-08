@@ -6,6 +6,7 @@
     python -m agent digest          what the agent did, or would have done
     python -m agent badges          recompute the health grade on every asset
     python -m agent runbooks        synthesise runbooks from resolved incidents
+    python -m agent notify          write role-tailored comms for open incidents
     python -m agent drill <name>    fire drill: break it on purpose, then heal it
 
 Run a scenario first (`python -m scenarios <name>`) to give the loop something to
@@ -47,6 +48,8 @@ def main() -> None:
 
     agent, mechanisms = _build_agent(args, llm)
 
+    if args.command == "notify":
+        return _notify(agent)
     if args.command == "drill":
         return _drill(agent, mechanisms, args.scenario)
 
@@ -62,7 +65,7 @@ def main() -> None:
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="agent")
     ap.add_argument("command", nargs="?", default="run",
-                    choices=["run", "digest", "badges", "runbooks", "drill"],
+                    choices=["run", "digest", "badges", "runbooks", "notify", "drill"],
                     help="what to do (default: run the loop)")
     ap.add_argument("scenario", nargs="?", help="scenario name, for `drill`")
     ap.add_argument("--fake", action="store_true", help="use canned mechanisms")
@@ -133,6 +136,33 @@ def _runbooks(llm) -> None:
     for change_type, urn, count in registered:
         print(f"  registered runbook for {change_type} "
               f"(from {count} incidents) -> {urn}")
+
+
+def _notify(agent: SentinelAgent) -> None:
+    """For every open incident, write the three role-tailored messages.
+
+    This is announce mode: it detects and analyses (context + RCA + cost) but does
+    not remediate, so the exposure reads as *at risk* and the guidance is 'do not
+    rely on this yet'. It is what would go to Slack the moment an incident is
+    found; delivery is a later, optional wrapper.
+    """
+    from agent.reporting.comms import compose
+    from agent.reporting.cost import CostEstimator
+
+    incidents = agent.m.detect_incidents()
+    if not incidents:
+        print("\nNo open incidents to notify about.")
+        return
+
+    estimator = CostEstimator()
+    print(f"\n{len(incidents)} open incident(s):")
+    for inc in incidents:
+        ctx = agent.m.read_context(inc.asset_urn)
+        rca = agent.rca.analyze(inc, ctx)
+        cost = estimator.estimate(ctx, rca.change_type.value)
+        messages = compose(inc, ctx, rca, cost)
+        print(f"\n{'=' * 70}\n=== {inc.id}: {inc.summary} ===")
+        print(messages.render())
 
 
 def _drill(agent: SentinelAgent, mechanisms, scenario: str | None) -> None:
