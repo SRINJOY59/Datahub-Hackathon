@@ -260,6 +260,12 @@ class PipelineReset:
     asks every registered scenario to clean up after itself, then rebuilds the
     warehouse from seed and re-captures the 'last known good' state that the
     Time Machine rolls back to.
+
+    "Last known good" has to mean every reference the agent compares against —
+    the table snapshots, the volume and freshness baseline, the champion alias,
+    and the scoring baseline. Leaving any one of them behind lets a scenario's
+    deliberate perturbation outlive the reset and quietly change what the next
+    run detects.
     """
 
     def run(self, reingest_after: bool = True) -> bool:
@@ -340,6 +346,18 @@ class PipelineReset:
         print(f"[reset] captured last-good snapshot of {len(tables)} table(s)")
         BaselineStore().capture()
         print("[reset] captured volume/freshness baseline")
+
+        # The scoring baseline is part of "last known good" too, and it is the
+        # one piece a scenario can move permanently: training_serving_skew
+        # deliberately advances it, which is how it isolates skew from drift.
+        # Without re-anchoring here that shifted baseline outlives the reset and
+        # silently blinds the drift detector for every later run — a 1.4x shift
+        # measured against an already-1.6x reference reads as no drift at all.
+        try:
+            print(f"[reset] {rescore(update_baseline=True)}")
+        except Exception as e:
+            print(f"[reset] could not re-anchor the scoring baseline "
+                  f"({type(e).__name__}) — drift comparisons may be stale")
 
 
 def _clear_degraded_tags() -> int:

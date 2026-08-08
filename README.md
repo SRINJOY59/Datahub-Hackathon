@@ -225,11 +225,21 @@ The others follow the same three-step loop:
 | `volume_collapse` | 60% of rows never arrive | **repaired** — pinned back from the last-good snapshot |
 | `model_drift` | a uniform repricing shifts predictions | **repaired** — champion repointed |
 | `training_serving_skew` | serving features drift from the training distribution | **contained** — only retraining truly fixes it |
-| `label_leakage` | a label-derived surcharge leaks into `amount`; `roc_auc` hits 0.998 | **repaired** + a diff removing the feature |
+| `label_leakage` | a label-derived surcharge leaks into `amount`; `roc_auc` hits 0.998 | **contained** + a diff removing the feature* |
 | `duplicate_batch` | a batch is delivered twice | **repaired** — deduplicated |
 
+\* The containment — breaker, tags, escalation — is deterministic and always
+happens. The **diff needs the LLM**, and on a free-tier model it intermittently
+returns nothing; the agent then falls back to its deterministic RCA and proposes
+no fix. That degradation is by design, but it means the diff is best-effort
+rather than guaranteed.
+
 `label_leakage` is the one worth watching. A detector that only checks for
-metrics *falling* would wave it through and ship the model:
+metrics *falling* would wave it through and ship the model. It is also the
+clearest case of the agent knowing what it cannot do: the leak is in the data, so
+no earlier model helps — every one of them was fitted to a distribution the
+leaked feature no longer matches. It stops serving, warns downstream, and hands
+over the diff.
 
 ```bash
 python -m scenarios label_leakage && python -m agent
@@ -451,9 +461,35 @@ These need no Docker, no DataHub and no API key — run them first when somethin
 looks wrong, to tell "the agent is broken" apart from "the environment is":
 
 ```bash
+pytest tests/ -q                        # the offline suite
 python -m agent --fake                  # full loop on canned data
-python -c "import compileall,sys; sys.exit(0 if compileall.compile_dir('agent',quiet=1) else 1)"
 ```
+
+The suite covers the parts that decide what the agent does before any LLM is
+involved: the anomaly classifier and its boundaries, leak identification, the
+planner's recipe table, the autonomy tiers, journal round-trips and selective
+rollback, snapshot restore verified by content fingerprint, drift maths, the
+savings digest, trust scoring, and the contract-parity checks that catch a new
+signal type or action type being added without a home. It builds its own
+throwaway DuckDB, so running it can never disturb the pipeline you are demoing
+with.
+
+### Checking the agent against its own claims
+
+Every scenario declares what it expects the agent to do — the signal, the change
+type, the root cause, the actions, and whether the pipeline can actually be
+repaired afterwards. The harness runs the real loop and grades each one:
+
+```bash
+python -m scenarios verify --all --plan-only   # detection + RCA + planning, mutates nothing
+python -m scenarios verify --all               # the full loop, resets between each
+python -m scenarios verify stale_feed          # just one
+```
+
+`--plan-only` is the one to run habitually: it covers the reasoning half in a
+fraction of the time and changes nothing. A failed row is either a regression or
+an expectation that was written optimistically — both worth knowing, which is
+why the expectations live next to the scenarios rather than in the README.
 
 With the warehouse built, these exercise the pieces the remediation loop is built
 on. The last one is the important one — it proves a poisoned pipeline can be

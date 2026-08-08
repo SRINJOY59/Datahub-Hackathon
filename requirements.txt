@@ -42,3 +42,6 @@ pyyaml>=6.0
 # <2.12 keeps DataHub's telemetry dep (mixpanel) and the mcp 1.x client happy.
 pydantic>=2.11,<2.12
 rich>=13.7.0
+
+# --- Tests (offline: no DataHub, no warehouse, no API key) ---
+pytest>=8.0.0

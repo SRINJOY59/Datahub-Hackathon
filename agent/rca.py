@@ -92,12 +92,14 @@ class RCAEngine:
             change_type = ChangeType(root.data["change_type"])
             root_column = root.data["column"]
             root_asset = self._asset_urn(incident, root)
+            measured = True
         else:
             # No column-level anomaly. The signal itself may still say what kind
             # of change this is; only fall back to UNKNOWN (and the LLM) when it
             # genuinely doesn't.
             change_type = SIGNAL_TO_CHANGE.get(incident.signal_type,
                                                ChangeType.UNKNOWN)
+            measured = change_type is not ChangeType.UNKNOWN
             root_column, root_asset = None, self._root_asset_without_column(
                 incident, evidence)
 
@@ -111,7 +113,21 @@ class RCAEngine:
 
         narrative = (result.root_cause if result
                      else self._deterministic_narrative(incident, evidence, change_type))
-        confidence = (result.confidence if result else ("high" if root else "low"))
+
+        # Confidence describes how sure we are of the *classification*, so it
+        # belongs to whatever produced it. When a probe measured the anomaly or
+        # the signal itself names the change, that is arithmetic — 3218 rows
+        # against a baseline of 8000 is not a judgement call, and letting the
+        # LLM's prose confidence override it made the autonomy tier vary between
+        # identical runs, so the same incident was sometimes repaired and
+        # sometimes only contained. The model decides confidence only when it
+        # also decided the classification.
+        if measured:
+            confidence = "high"
+        elif result:
+            confidence = result.confidence
+        else:
+            confidence = "low"
         mitigation = (result.recommended_mitigation if result
                       else _default_mitigation(change_type))
 
