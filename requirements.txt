@@ -15,10 +15,18 @@ numpy>=1.26.0
 # --- Agent loop / LLM reasoning (OpenRouter via the OpenAI-compatible SDK) ---
 openai>=1.40.0
 
+# --- Read DataHub through the official MCP Server (SENTINEL_USE_MCP=1) ---
+# The MCP client SDK. The server itself runs isolated via `uvx
+# mcp-server-datahub@latest`, so it is not a Python dependency here — but `uv`
+# must be installed (https://docs.astral.sh/uv/). mcp 2.x requires pydantic
+# >=2.12, which conflicts with a DataHub telemetry dep; pin the 1.x client.
+mcp>=1.2,<2
+
 # --- Fix-PR generation (feature #3 Parallel Universe / propose_fix) ---
 PyGithub>=2.3.0
 
 # --- Config / utils ---
 python-dotenv>=1.0.0
-pydantic>=2.6.0
+# <2.12 keeps DataHub's telemetry dep (mixpanel) and the mcp 1.x client happy.
+pydantic>=2.11,<2.12
 rich>=13.7.0

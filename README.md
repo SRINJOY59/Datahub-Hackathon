@@ -326,6 +326,14 @@ data before the champion alias moves, and a generated code fix is parsed before
 it is proposed. Neither touches production; both produce a before/after you can
 put in a PR.
 
+**Reads DataHub through the MCP Server.** Set `SENTINEL_USE_MCP=1` and Sentinel
+reads lineage and schema through the official
+[DataHub MCP Server](https://docs.datahub.com/docs/features/feature-guides/mcp) —
+the same `mcp-server-datahub` that Claude Desktop and Cursor use — instead of the
+Python SDK. The server runs isolated via `uvx mcp-server-datahub@latest` (needs
+[`uv`](https://docs.astral.sh/uv/)) against the local Core instance; if it can't
+start, Sentinel falls back to the SDK, so the flag is always safe to leave on.
+
 ---
 
 ## What the agent actually does to your system
