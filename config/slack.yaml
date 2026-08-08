@@ -1,0 +1,22 @@
+# Slack integration — channel routing and approval settings.
+#
+# Set SLACK_BOT_TOKEN and SLACK_SIGNING_SECRET in .env.
+# Create the channels below in your workspace, or change them to existing ones.
+
+enabled: true
+
+channels:
+  engineer: "#all-prodml"
+  analyst: "#all-prodml"
+  executive: "#all-prodml"
+
+approval:
+  timeout_minutes: 30
+  # What happens if nobody responds before the timeout.
+  # "protective_only" applies tags + breakers but withholds data changes.
+  # "deny" does nothing and leaves the incident open.
+  fallback: protective_only
+
+threading:
+  # One Slack thread per incident keeps the timeline in one place.
+  one_thread_per_incident: true

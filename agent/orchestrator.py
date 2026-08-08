@@ -27,6 +27,7 @@ from agent.contracts import (
     AutonomyTier,
     ChangeType,
     ContextBundle,
+    CostEstimate,
     Incident,
     IncidentOutcome,
     Mechanisms,
@@ -58,16 +59,16 @@ class SentinelAgent:
         policy: Optional[AutonomyPolicy] = None,
         planner: Optional[RemediationPlanner] = None,
         shadow: bool = False,
+        notifier=None,
     ) -> None:
         self.m = mechanisms
         self.memory = memory
         self.rca = RCAEngine(llm=llm, memory=memory)
         self.policy = policy or AutonomyPolicy()
         self.planner = planner or RemediationPlanner(self.policy)
-        # Shadow mode: reason all the way to a plan, record it, change nothing.
-        # This is how a team decides whether to trust the agent before granting
-        # it the ability to act.
         self.shadow = shadow
+        self.notifier = notifier
+        self._cost = CostEstimator()
 
     # --- THE LOOP ---------------------------------------------------------- #
     def handle(self, inc: Incident,
@@ -82,8 +83,10 @@ class SentinelAgent:
         rca = self.rca.analyze(inc, ctx)
         self._log_rca(rca)
 
-        # One upstream change can trip many downstream assertions. Mitigate the
-        # shared root cause once; note the rest rather than acting again.
+        if self.notifier:
+            cost = self._cost.estimate(ctx, rca.change_type.value)
+            self.notifier.on_detect(inc, ctx, rca, cost)
+
         root_key = (rca.root_cause_asset, rca.root_cause_column)
         if root_key in seen_roots:
             log("correlate", f"same root cause as {seen_roots[root_key]} — "
@@ -223,9 +226,6 @@ class SentinelAgent:
         return journal
 
     def _succeed(self, inc, ctx, rca, tier, applied) -> None:
-        # The pipeline is healthy again, so the warnings have to come down with
-        # it: a breaker left open after the fix keeps the scoring job down for no
-        # reason, and flags that outlive their incident stop being read.
         released, failed = self.m.release_containment(inc.id)
         if released:
             log("restore", f"lifted {released} protective measure(s) — breaker "
@@ -233,12 +233,18 @@ class SentinelAgent:
                 + (f" ({failed} could not be lifted)" if failed else ""))
 
         pr = self._propose_fix(inc, ctx, rca) if self.policy.needs_human(tier) else None
+        applied_types = [a.action_type.value for a in applied]
         self._resolve(
             inc, ctx, rca,
-            actions_taken=[a.action_type.value for a in applied],
+            actions_taken=applied_types,
             resolution=(f"mitigated ({rca.recommended_mitigation})"
                         + (f"; fix for review: {pr}" if pr else "")),
         )
+
+        if self.notifier:
+            cost = self._cost.estimate(ctx, rca.change_type.value)
+            outcome = self._outcome(inc, rca, "resolved", True, applied_types, pr)
+            self.notifier.on_resolve(inc, ctx, rca, cost, outcome)
 
     def _propose_fix(self, inc, ctx, rca) -> Optional[str]:
         """Ask for a code fix, and only report one if it actually produced an
@@ -253,27 +259,25 @@ class SentinelAgent:
         return result
 
     def _contain(self, inc, ctx, rca, tier, applied, failures) -> None:
-        """The agent did everything available to it and the incident persists.
-
-        Some things genuinely cannot be repaired from here — a feed that stopped
-        delivering has no rows to restore. Withdrawing the protection because the
-        pipeline is still broken would be exactly backwards, so the tags and
-        breakers stay up and a human is paged. The post-mortem is still recorded:
-        memory should learn from the incidents we cannot fix too.
-        """
         held = ", ".join(sorted({a.action_type.value for a in applied}))
         log("contain", f"no repair exists for {rca.change_type.value} — "
                        f"holding {len(applied)} protective action(s): {held}")
         log("contain", f"still failing (expected): {failures}")
         self._escalate(inc, ctx, rca, tier,
                        reason="contained, but only a human can resolve this")
+        applied_types = [a.action_type.value for a in applied]
         self._resolve(
             inc, ctx, rca,
-            actions_taken=[a.action_type.value for a in applied],
+            actions_taken=applied_types,
             resolution=(f"CONTAINED, awaiting human — {rca.recommended_mitigation}. "
                         f"Protection held: {held}. Outstanding: {failures}"),
             resolved=False,
         )
+
+        if self.notifier:
+            cost = self._cost.estimate(ctx, rca.change_type.value)
+            outcome = self._outcome(inc, rca, "contained", False, applied_types)
+            self.notifier.on_contain(inc, ctx, rca, cost, outcome, failures)
 
     def _roll_back(self, inc, ctx, rca, tier, applied, failures) -> None:
         reverted, failed = self.m.rollback(inc.id, mutating_only=True)
@@ -286,10 +290,17 @@ class SentinelAgent:
         self._escalate(inc, ctx, rca, tier,
                        reason=f"validation still failing: {failures}")
 
+        if self.notifier:
+            applied_types = [a.action_type.value for a in applied]
+            outcome = self._outcome(inc, rca, "rolled_back", False, applied_types)
+            self.notifier.on_rollback(inc, ctx, rca, outcome, failures)
+
     def _escalate(self, inc, ctx, rca, tier, reason: str) -> None:
         log("escalate", f"paging {ctx.owners or ['(no owner on the asset)']} — {reason}")
         if self.policy.needs_human(tier):
             self._propose_fix(inc, ctx, rca)
+        if self.notifier:
+            self.notifier.on_escalate(inc, ctx, rca, tier, reason)
 
     def _resolve(self, inc, ctx, rca, actions_taken: list[str],
                  resolution: str, resolved: bool = True) -> None:

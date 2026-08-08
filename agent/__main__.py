@@ -83,11 +83,21 @@ def _build_agent(args, llm) -> tuple[SentinelAgent, object]:
         from agent.tools.mechanisms.composite import RealMechanisms
         from memory.base import get_memory
 
-        memory = get_memory()  # DataHub-backed incident memory
+        memory = get_memory()
         mechanisms = RealMechanisms(llm=llm, memory=memory)
 
-    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, shadow=args.shadow)
+    notifier = _get_notifier()
+    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, shadow=args.shadow,
+                          notifier=notifier)
     return agent, mechanisms
+
+
+def _get_notifier():
+    try:
+        from agent.integrations.slack import shared_slack
+        return shared_slack()
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -141,10 +151,7 @@ def _runbooks(llm) -> None:
 def _notify(agent: SentinelAgent) -> None:
     """For every open incident, write the three role-tailored messages.
 
-    This is announce mode: it detects and analyses (context + RCA + cost) but does
-    not remediate, so the exposure reads as *at risk* and the guidance is 'do not
-    rely on this yet'. It is what would go to Slack the moment an incident is
-    found; delivery is a later, optional wrapper.
+    Prints the messages to stdout AND posts them to Slack when configured.
     """
     from agent.reporting.comms import compose
     from agent.reporting.cost import CostEstimator
@@ -155,6 +162,7 @@ def _notify(agent: SentinelAgent) -> None:
         return
 
     estimator = CostEstimator()
+    notifier = agent.notifier
     print(f"\n{len(incidents)} open incident(s):")
     for inc in incidents:
         ctx = agent.m.read_context(inc.asset_urn)
@@ -163,6 +171,8 @@ def _notify(agent: SentinelAgent) -> None:
         messages = compose(inc, ctx, rca, cost)
         print(f"\n{'=' * 70}\n=== {inc.id}: {inc.summary} ===")
         print(messages.render())
+        if notifier:
+            notifier.announce(inc, ctx, rca, cost)
 
 
 def _drill(agent: SentinelAgent, mechanisms, scenario: str | None) -> None:
