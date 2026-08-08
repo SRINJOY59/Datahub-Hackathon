@@ -1,11 +1,9 @@
-"""Run an incident scenario, capture a baseline, or reset the pipeline.
+"""Run an incident scenario, capture a baseline, reset, or verify the agent.
 
     python -m scenarios list                 # list available scenarios
     python -m scenarios unit_bug             # inject the unit-bug incident
     python -m scenarios reset                # restore a clean, healthy pipeline
     python -m scenarios snapshot             # capture the last-known-good state
-    python -m scenarios verify --all         # check every scenario against its
-                                             # declared expectation
 
     add --no-reingest to skip the DataHub refresh (faster local iteration)
 """
@@ -33,7 +31,7 @@ def main() -> None:
         raise SystemExit(verify_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="scenarios")
-    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', 'verify', or 'list'")
+    ap.add_argument("action", help="scenario name, 'reset', 'snapshot', or 'list'")
     ap.add_argument("--no-reingest", action="store_true")
     args = ap.parse_args()
 
@@ -50,11 +48,16 @@ def main() -> None:
     if args.action == "snapshot":
         capture_last_good()
         return
+    if args.action == "verify":
+        from scenarios.verify import main as verify_main
+
+        sys.exit(verify_main(args.names or None))
 
     cls = registry.get(args.action)
     if cls is None:
         raise SystemExit(f"unknown scenario '{args.action}'. "
-                         f"Options: {', '.join(registry.names())}, reset, snapshot, list")
+                         f"Options: {', '.join(registry.names())}, reset, snapshot, "
+                         f"verify, list")
 
     cls().apply(reingest_after=reingest_after)
 

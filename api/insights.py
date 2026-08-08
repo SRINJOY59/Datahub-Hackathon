@@ -1,0 +1,196 @@
+"""Read-side adapters over the agent's own modules.
+
+Everything here reads what the loop already produces — trust scores, the
+savings digest, registered runbooks, the action journal — and returns plain
+dicts for the resolvers. Two rules shape it:
+
+  * DataHub may be down. Every function that touches the graph degrades to an
+    empty result instead of raising, because a dashboard panel that cannot
+    load is a worse failure than a panel that says "nothing yet".
+  * Scoring is not free. TrustScorer.score() makes several DataHub calls per
+    asset, so the badge list is cached behind a short TTL rather than
+    recomputed on every poll of every open browser tab.
+"""
+from __future__ import annotations
+
+import os
+import time
+from typing import Any, Optional
+
+_TRUST_TTL_SECONDS = 60.0
+_trust_cache: tuple[float, list[dict]] | None = None
+
+
+def _gms() -> str:
+    return os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
+
+
+def savings_digest() -> dict:
+    from agent.reporting.digest import SavingsDigest
+
+    try:
+        d = SavingsDigest().build()
+    except Exception:
+        return {
+            "incidents": 0, "actions_applied": 0, "actions_simulated": 0,
+            "actions_failed": 0, "hours_saved": 0.0, "shadow_mode": False,
+            "by_action": [],
+        }
+    return {
+        "incidents": d.incidents,
+        "actions_applied": d.actions_applied,
+        "actions_simulated": d.actions_simulated,
+        "actions_failed": d.actions_failed,
+        "hours_saved": d.hours_saved,
+        "shadow_mode": d.shadow_mode,
+        "by_action": [{"action_type": k, "count": v} for k, v in
+                      sorted(d.by_action.items(), key=lambda kv: -kv[1])],
+    }
+
+
+def journal_entries(limit: int = 100) -> list[dict]:
+    from agent.journal import ActionJournal
+
+    try:
+        entries = ActionJournal().entries()
+    except Exception:
+        return []
+    out = []
+    for e in entries[-limit:][::-1]:  # newest first
+        out.append({
+            "action_type": getattr(e.action_type, "value", str(e.action_type)),
+            "target": e.target,
+            "status": e.status,
+            "note": e.note,
+            "incident_id": e.incident_id,
+            "reversible": e.inverse is not None,
+            "applied_at": e.applied_at.isoformat() if e.applied_at else None,
+        })
+    return out
+
+
+def trust_badges(force: bool = False) -> list[dict]:
+    """Live trust score per dbt dataset. Never publishes — this is the
+    read-only view of what `python -m agent badges` would write."""
+    global _trust_cache
+    now = time.monotonic()
+    if not force and _trust_cache and (now - _trust_cache[0]) < _TRUST_TTL_SECONDS:
+        return _trust_cache[1]
+
+    try:
+        from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
+
+        from agent.tools.graph.trust import TrustScorer
+        from agent.tools.graph.urns import short_name
+
+        graph = DataHubGraph(DataHubGraphConfig(server=_gms()))
+        scorer = TrustScorer(gms_server=_gms())
+        urns = sorted(graph.get_urns_by_filter(entity_types=["dataset"],
+                                               platform="dbt"))
+    except Exception:
+        return _trust_cache[1] if _trust_cache else []
+
+    rows: list[dict] = []
+    for urn in urns:
+        try:
+            s = scorer.score(urn)
+        except Exception:
+            continue
+        rows.append({
+            "asset_urn": urn,
+            "asset_name": short_name(urn) or urn,
+            "score": s.score,
+            "grade": s.grade,
+            "failed_assertions": int(s.inputs.get("failed_assertions", 0) or 0),
+            "open_incident": bool(s.inputs.get("open_incident", False)),
+            "volume_shift": float(s.inputs.get("volume_shift", 0.0) or 0.0),
+            "freshness_lag_hours": float(s.inputs.get("freshness_lag_hours", 0.0) or 0.0),
+            "past_incidents": int(s.inputs.get("past_incidents", 0) or 0),
+        })
+    rows.sort(key=lambda r: r["score"])
+    _trust_cache = (now, rows)
+    return rows
+
+
+def registered_runbooks() -> list[dict]:
+    """The AgentSkill entities Sentinel has published, read back from DataHub.
+
+    Pairs each with how many post-mortems currently back it, so the page can
+    show both what exists and what is close to earning one.
+    """
+    from agent.contracts import ChangeType
+
+    try:
+        from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
+        from datahub.metadata.schema_classes import AgentSkillInfoClass
+
+        from agent.knowledge.runbook import MIN_INCIDENTS, skill_urn
+
+        graph = DataHubGraph(DataHubGraphConfig(server=_gms()))
+    except Exception:
+        return []
+
+    try:
+        from agent.knowledge.runbook import RunbookSynthesizer
+
+        grouped = RunbookSynthesizer().collect()
+    except Exception:
+        grouped = {}
+
+    out: list[dict] = []
+    for change_type in [c.value for c in ChangeType]:
+        urn = skill_urn(change_type)
+        info: Optional[Any] = None
+        try:
+            info = graph.get_aspect(urn, AgentSkillInfoClass)
+        except Exception:
+            info = None
+        backing = len(grouped.get(change_type, []))
+        if info is None and backing == 0:
+            continue  # neither registered nor has any history — not interesting
+        out.append({
+            "change_type": change_type,
+            "skill_urn": urn if info is not None else None,
+            "registered": info is not None,
+            "title": getattr(info, "name", None),
+            "description": getattr(info, "description", None),
+            "instructions": getattr(info, "instructions", None),
+            "incidents_backing": backing,
+            "incidents_needed": max(0, MIN_INCIDENTS - backing),
+        })
+    out.sort(key=lambda r: (not r["registered"], -r["incidents_backing"]))
+    return out
+
+
+def webhook_activity() -> dict:
+    """Live view of the webhook RunQueue.
+
+    Only populated when the API is attached to `python -m agent serve`, since
+    that is what constructs the queue; standalone `python -m api` legitimately
+    has nothing to report here rather than pretending otherwise.
+    """
+    try:
+        from agent.integrations.webhooks import server as webhook_server
+
+        queue = getattr(webhook_server, "_queue", None)
+        if queue is None:
+            return {"attached": False, "active": [], "recent": []}
+
+        def row(r):
+            return {
+                "run_id": r.run_id,
+                "asset_urn": r.asset_urn,
+                "source": r.source,
+                "status": r.status,
+                "started_at": r.started_at.isoformat() if r.started_at else None,
+                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                "error": r.error,
+            }
+
+        return {
+            "attached": True,
+            "active": [row(r) for r in queue.active_runs()],
+            "recent": [row(r) for r in reversed(queue.recent_runs(limit=25))],
+        }
+    except Exception:
+        return {"attached": False, "active": [], "recent": []}

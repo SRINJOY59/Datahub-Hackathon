@@ -139,18 +139,29 @@ class RCAEngine:
             confidence=confidence,
             narrative=narrative,
             evidence=[e.summary for e in evidence],
-            # Only datasets have a table lineage to walk; asking for the upstream
-            # path of a model urn returns a one-element path made of the model's
-            # own name, which reads like real lineage and is not.
-            upstream_path=(self.lineage.table_upstream_path(incident.asset_urn)
-                           if self.lineage and is_dataset(incident.asset_urn)
-                           else []),
+            upstream_path=self._upstream_path(incident),
             blast_radius=[n.name for n in context.downstream],
             recommended_mitigation=mitigation,
             precedents=[p.incident_id for p in precedents],
         )
 
     # ------------------------------------------------------------------ #
+    def _upstream_path(self, incident: Incident) -> list[str]:
+        """The table path from the incident asset to its source, for the report.
+
+        Only datasets have a table lineage to walk; asking for the upstream path
+        of a model urn returns a one-element path made of the model's own name,
+        which reads like real lineage and is not. A transient graph failure here
+        returns an empty path rather than sinking the whole analysis — same
+        posture as a flaky probe.
+        """
+        if not (self.lineage and is_dataset(incident.asset_urn)):
+            return []
+        try:
+            return self.lineage.table_upstream_path(incident.asset_urn)
+        except Exception:
+            return []
+
     @staticmethod
     def _pick_root(evidence: list[Evidence]) -> Optional[Evidence]:
         data_ev = [e for e in evidence if e.data.get("column")]

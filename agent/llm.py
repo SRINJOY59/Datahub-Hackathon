@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Optional, Type, TypeVar
+from typing import Iterator, Optional, Type, TypeVar
 
 from pydantic import BaseModel, ValidationError
 
@@ -95,6 +95,56 @@ class LLMClient:
                 if attempt < retries - 1:
                     time.sleep(1.5 * (attempt + 1))
         raise RuntimeError(f"LLM call failed after {retries} attempts: {last_err}")
+
+    def stream(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        temperature: float = 0.3,
+        max_tokens: int = 800,
+    ) -> Iterator[tuple[str, str]]:
+        """Yield (kind, text) deltas as they arrive, for chat UIs.
+
+        kind is "content" (the answer) or "reasoning" (a thinking model's
+        chain-of-thought, when the provider exposes it as a separate field).
+        These are genuinely two different channels, not two names for the
+        same text — collapsing them with `content or reasoning` looks
+        reasonable but silently interleaves chain-of-thought into the visible
+        answer the moment a thinking model is behind the API, since
+        `content` starts as an empty string (falsy) while the model thinks.
+        Callers that only want the answer should filter to kind == "content".
+
+        Unlike complete(), this does not retry mid-stream — a partial answer
+        that then errors is a normal, visible thing in a chat transcript, not
+        a failure to hide. Raises RuntimeError up front if no key is set, so
+        callers can show a real error before opening the stream.
+        """
+        if not self._client:
+            raise RuntimeError(
+                "LLMClient has no API key. Set OPENROUTER_API_KEY to enable LLM calls."
+            )
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
+
+        response = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+        )
+        for chunk in response:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            content = getattr(delta, "content", None)
+            reasoning = getattr(delta, "reasoning", None)
+            if content:
+                yield "content", content
+            elif reasoning:
+                yield "reasoning", reasoning
 
     def structured(
         self,

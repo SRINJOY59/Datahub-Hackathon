@@ -1,0 +1,18 @@
+# PagerDuty integration — page humans for critical incidents.
+#
+# Set PAGERDUTY_ROUTING_KEY in .env to the integration key from your
+# PagerDuty service (Events API v2 integration).
+
+enabled: true
+
+# Only page on these autonomy tiers. HUMAN_ONLY means the agent can't
+# fix it alone — that's when you want a human woken up.
+page_on_tiers:
+  - HUMAN_ONLY
+
+# Severity mapping: RCA confidence → PagerDuty severity.
+# Options: critical, error, warning, info.
+severity:
+  low: critical
+  medium: error
+  high: warning

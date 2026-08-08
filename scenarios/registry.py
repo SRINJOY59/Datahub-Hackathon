@@ -13,6 +13,7 @@ from scenarios.duplicate_batch import DuplicateBatchScenario
 from scenarios.label_leakage import LabelLeakageScenario
 from scenarios.model_drift import ModelDriftScenario
 from scenarios.null_spike import NullSpikeScenario
+from scenarios.risky_commit import RiskyCommitScenario
 from scenarios.schema_change import SchemaChangeScenario
 from scenarios.stale_feed import StaleFeedScenario
 from scenarios.training_regression import TrainingRegressionScenario
@@ -36,6 +37,7 @@ _REGISTERED: list[type[BaseScenario]] = [
     # Outside the warehouse entirely.
     ApiBreakingChangeScenario,
     TrainingRegressionScenario,
+    RiskyCommitScenario,
 ]
 
 SCENARIOS: dict[str, type[BaseScenario]] = {s.name: s for s in _REGISTERED}

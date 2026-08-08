@@ -97,6 +97,25 @@ class GitHistory:
         out = self._git(["show", "--name-only", "--format=", sha])
         return [line.strip() for line in out.splitlines() if line.strip()]
 
+    # ------------------------------------------------------------------ #
+    def head_sha(self) -> str:
+        return self._git(["rev-parse", "--short", "HEAD"]).strip()
+
+    def parent_sha(self, sha: str) -> str:
+        """The parent of a commit, resolved to a real sha (empty if it's the
+        root). Used to stage a commit as 'the newest unreviewed change'."""
+        return self._git(["rev-parse", "--short", f"{sha}~1"]).strip()
+
+    def commits_since(self, base_sha: str, paths: list[str],
+                      limit: int = 20) -> list[Commit]:
+        """Commits on top of `base_sha` up to HEAD that touched any of `paths` —
+        i.e. the changes landed since a known-good point that a detector hasn't
+        acknowledged yet."""
+        args = ["log", f"{base_sha}..HEAD", f"-{limit}", f"--format={_LOG_FORMAT}"]
+        if paths:
+            args += ["--", *paths]
+        return _parse_log(self._git(args))
+
 
 # --------------------------------------------------------------------------- #
 def _parse_log(output: str, rel_path: str = "") -> list[Commit]:

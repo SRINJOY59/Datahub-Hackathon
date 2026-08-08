@@ -23,16 +23,6 @@ from agent.contracts import (
     SignalType,
 )
 
-_GQL_TYPE_TO_ENTITY = {
-    "DATASET": "dataset",
-    "MLMODEL": "mlModel",
-    "MLMODEL_GROUP": "mlModelGroup",
-    "MLMODEL_DEPLOYMENT": "mlModelDeployment",
-    "DATA_JOB": "dataJob",
-    "DATA_FLOW": "dataFlow",
-}
-
-
 def _short_name(urn: str) -> str:
     """Human-ish name from a urn tail, e.g. '...main.feat_user_txn_stats,PROD)'."""
     if urn.startswith("urn:li:dataset:"):
@@ -44,6 +34,25 @@ def _short_name(urn: str) -> str:
     if urn.startswith("urn:li:dataJob:"):
         return urn.split(",")[-1].rstrip(")")
     return urn
+
+
+_URN_PREFIX_TO_ENTITY = {
+    "urn:li:dataset:": "dataset",
+    "urn:li:mlModelDeployment:": "mlModelDeployment",
+    "urn:li:mlModelGroup:": "mlModelGroup",
+    "urn:li:mlModel:": "mlModel",
+    "urn:li:dataJob:": "dataJob",
+    "urn:li:dataFlow:": "dataFlow",
+}
+
+
+def _entity_type_from_urn(urn: str) -> str:
+    """The MCP lineage tool returns urns without a separate type field, so derive
+    it from the urn — which is unambiguous."""
+    for prefix, kind in _URN_PREFIX_TO_ENTITY.items():
+        if urn.startswith(prefix):
+            return kind
+    return "dataset"
 
 
 class DataHubContextTool:
@@ -118,38 +127,69 @@ class DataHubContextTool:
     # context
     # ------------------------------------------------------------------ #
     def _lineage(self, urn: str, direction: str) -> list[LineageNode]:
+        """Lineage via the DataHub MCP Server when enabled, else the SDK."""
+        nodes = self._lineage_mcp(urn, direction)
+        return nodes if nodes is not None else self._lineage_sdk(urn, direction)
+
+    def _lineage_mcp(self, urn: str, direction: str) -> list[LineageNode] | None:
+        from agent.tools.mcp.client import shared_mcp
+
+        mcp = shared_mcp()
+        if mcp is None:
+            return None
+        upstream = direction == "UPSTREAM"
+        res = mcp.call_json("get_lineage", {"urn": urn, "upstream": upstream,
+                                            "max_hops": 3, "max_results": 100})
+        block = res.get("upstreams" if upstream else "downstreams") or {}
+        results = block.get("searchResults")
+        if not results:
+            return None  # empty or failed -> let the SDK have a go
+        return self._dedupe([r.get("entity", {}).get("urn") for r in results], urn)
+
+    def _lineage_sdk(self, urn: str, direction: str) -> list[LineageNode]:
         q = """
         query($urn:String!,$dir:LineageDirection!){
           searchAcrossLineage(input:{urn:$urn, direction:$dir, query:"*",
                                      start:0, count:100}){
-            searchResults { entity { urn type } }
+            searchResults { entity { urn } }
           }
         }"""
         res = self.graph.execute_graphql(q, variables={"urn": urn, "dir": direction})
         results = (res.get("searchAcrossLineage") or {}).get("searchResults") or []
-        self_name = _short_name(urn)
+        return self._dedupe([r["entity"]["urn"] for r in results], urn)
+
+    @staticmethod
+    def _dedupe(urns: list[str], self_urn: str) -> list[LineageNode]:
+        """Collapse dbt/duckdb siblings by name and drop self-references, so the
+        agent reasons over one logical node per table regardless of source."""
+        self_name = _short_name(self_urn)
         nodes: list[LineageNode] = []
         seen: set[str] = set()
-        for r in results:
-            e = r["entity"]
-            name = _short_name(e["urn"])
-            # dedupe dbt/duckdb siblings by name, and drop self-references
+        for eurn in urns:
+            if not eurn:
+                continue
+            name = _short_name(eurn)
             if name == self_name or name in seen:
                 continue
             seen.add(name)
-            nodes.append(
-                LineageNode(
-                    urn=e["urn"],
-                    name=name,
-                    entity_type=_GQL_TYPE_TO_ENTITY.get(e["type"], e["type"].lower()),
-                )
-            )
+            nodes.append(LineageNode(urn=eurn, name=name,
+                                     entity_type=_entity_type_from_urn(eurn)))
         return nodes
 
-    def read_context(self, asset_urn: str) -> ContextBundle:
-        schema = self.graph.get_aspect(asset_urn, SchemaMetadataClass)
-        fields = [f.fieldPath for f in schema.fields] if schema else []
+    def _schema_fields(self, urn: str) -> list[str]:
+        """Schema via the DataHub MCP Server when enabled, else the SDK."""
+        from agent.tools.mcp.client import shared_mcp
 
+        mcp = shared_mcp()
+        if mcp is not None:
+            res = mcp.call_json("list_schema_fields", {"urn": urn})
+            fields = res.get("fields")
+            if fields:
+                return [f["fieldPath"] for f in fields if f.get("fieldPath")]
+        schema = self.graph.get_aspect(urn, SchemaMetadataClass)
+        return [f.fieldPath for f in schema.fields] if schema else []
+
+    def read_context(self, asset_urn: str) -> ContextBundle:
         tags_aspect = self.graph.get_aspect(asset_urn, GlobalTagsClass)
         tags = [t.tag.split(":")[-1] for t in tags_aspect.tags] if tags_aspect else []
 
@@ -162,7 +202,7 @@ class DataHubContextTool:
             entity_type="dataset",
             upstream=self._lineage(asset_urn, "UPSTREAM"),
             downstream=self._lineage(asset_urn, "DOWNSTREAM"),
-            schema_fields=fields,
+            schema_fields=self._schema_fields(asset_urn),
             owners=owners,
             tags=tags,
             failed_assertions=self._failed_assertions(asset_urn),

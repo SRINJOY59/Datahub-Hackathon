@@ -44,6 +44,19 @@ class ActionType(str, Enum):
     DEDUPE_PARTITION = "dedupe_partition"  # drop duplicate keys from a re-delivered batch
 
 
+# Protective actions only ever reduce harm — they warn consumers off data we
+# believe is bad (tag, pause). Everything else changes data or what is serving
+# (pin, quarantine, dedupe, repoint) and is "mutating". This split drives autonomy
+# tiers, rollback (keep protection up while withdrawing a failed repair), and
+# containment. It lives next to ActionType because it is a property of the action,
+# not of any one policy — several modules classify actions and must agree.
+PROTECTIVE_ACTIONS = frozenset({ActionType.TAG_ASSET, ActionType.PAUSE_JOB})
+
+
+def is_protective(action_type: "ActionType") -> bool:
+    return action_type in PROTECTIVE_ACTIONS
+
+
 class AutonomyTier(str, Enum):
     AUTO = "auto"            # small blast radius, non-critical -> full auto
     PR_ONLY = "pr_only"      # Tier-Critical -> code fix via human-approved PR
@@ -177,6 +190,16 @@ class RootCauseAnalysis:
 
 
 @dataclass
+class CostEstimate:
+    """The business exposure an incident would have caused unremediated — a
+    transparent, tunable order-of-magnitude, not a precise figure."""
+    dollars: float
+    hours_at_risk: float
+    breakdown: dict = field(default_factory=dict)
+    basis: str = ""            # human-readable arithmetic behind the number
+
+
+@dataclass
 class PostMortem:
     incident_id: str
     asset_urn: str
@@ -185,6 +208,24 @@ class PostMortem:
     actions_taken: list[str] = field(default_factory=list)
     resolution: str = ""
     resolved_at: Optional[datetime] = None
+    estimated_impact_usd: float = 0.0   # exposure avoided, for the trust badge
+    impact_basis: str = ""              # how that figure was reached
+
+
+@dataclass
+class IncidentOutcome:
+    """What the agent actually did about one incident. Returned by handle() so a
+    caller — the verification harness, an API, a dashboard — can check the outcome
+    against what was expected, instead of scraping log lines."""
+    incident_id: str
+    status: str                    # resolved | contained | rolled_back | escalated
+    #                                | correlated | shadow | code_fix
+    resolved: bool
+    change_type: ChangeType
+    root_cause_asset: str = ""
+    root_cause_column: Optional[str] = None
+    actions_taken: list[str] = field(default_factory=list)  # applied ActionType values
+    pr: Optional[str] = None
 
 
 @dataclass
@@ -232,7 +273,20 @@ class Mechanisms(Protocol):
         ...
 
     def undo(self, action: ActionRecord) -> bool:
-        """Replay an action's inverse (rollback)."""
+        """Replay a single action's inverse."""
+        ...
+
+    def rollback(self, incident_id: str,
+                 mutating_only: bool = False) -> tuple[int, int]:
+        """Undo an incident's applied actions in reverse order, returning
+        (reverted, failed). `mutating_only` withdraws data/serving changes while
+        leaving protective tags and breakers in place — a failed repair is a
+        reason to keep warning consumers off, not to stop."""
+        ...
+
+    def release_containment(self, incident_id: str) -> tuple[int, int]:
+        """Lift the protective measures (close the breaker, clear the tags) once
+        the incident is genuinely fixed. Returns (released, failed)."""
         ...
 
     def propose_fix(self, incident: Incident, context: ContextBundle,
@@ -241,8 +295,10 @@ class Mechanisms(Protocol):
         open a draft PR; return the PR URL or a local diff path."""
         ...
 
-    def write_back(self, post_mortem: PostMortem) -> None:
-        """Write the incident + post-mortem back into DataHub."""
+    def write_back(self, post_mortem: PostMortem, resolved: bool = True) -> None:
+        """Write the incident + post-mortem back into DataHub. `resolved=False`
+        records a contained-but-unresolved incident and leaves the degraded tags
+        in place."""
         ...
 
     def inject_failure(self, scenario_name: str) -> Optional[Incident]:

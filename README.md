@@ -307,7 +307,18 @@ computed from failing assertions, open incidents, and deviation from the recorde
 baseline. The inputs are published next to the score, because a health grade
 nobody can explain is one nobody will act on. The grade refreshes whenever an
 incident closes — including a *contained* one, which is when a low grade matters
-most.
+most. The score and its arithmetic are written into the asset's editable
+description (the catalog "About" box), so a human browsing the table sees the same
+health the agent does.
+
+**Incident cost.** Each resolved incident carries an estimated business exposure,
+shown in the badge and the agent log. Sentinel does not invent the figure: it
+measures the real downstream blast radius from the lineage graph and applies the
+rates in **`config/cost_model.yaml`** — which are *yours* to set (per-consumer
+rates, assumed MTTR, per-change-type severity). Every estimate cites its
+assumptions, flags when it fell back to illustrative defaults, and produces no
+dollar figure at all when you set `enabled: false`. The number is only ever as
+good as your config, so it always shows its work.
 
 **Runbooks.** Every resolved incident leaves a post-mortem. Once there are
 several of the same kind, `runbooks` reads them back and writes down the
@@ -324,6 +335,14 @@ is what someone actually needs in order to fix it.
 data before the champion alias moves, and a generated code fix is parsed before
 it is proposed. Neither touches production; both produce a before/after you can
 put in a PR.
+
+**Reads DataHub through the MCP Server.** Set `SENTINEL_USE_MCP=1` and Sentinel
+reads lineage and schema through the official
+[DataHub MCP Server](https://docs.datahub.com/docs/features/feature-guides/mcp) —
+the same `mcp-server-datahub` that Claude Desktop and Cursor use — instead of the
+Python SDK. The server runs isolated via `uvx mcp-server-datahub@latest` (needs
+[`uv`](https://docs.astral.sh/uv/)) against the local Core instance; if it can't
+start, Sentinel falls back to the SDK, so the flag is always safe to leave on.
 
 ---
 
@@ -368,7 +387,41 @@ change data or what is serving.
 |---|---|---|
 | `auto` | no sensitive tags, high confidence, small blast radius | acts, no PR needed |
 | `pr_only` | `Tier-Critical` / `PII` / low confidence / wide blast radius | mitigates now, opens a fix for review |
-| `human_only` | `PII` **and** confidence below high | protective actions only, pages the owners |
+---
+
+## Web Dashboard & Pipeline Observability
+
+The Next.js dashboard provides a live command center for data engineers and on-call operators:
+
+```bash
+# In terminal 1: Start the Sentinel backend & webhook server (port 8090)
+python -m agent serve
+
+# In terminal 2: Start the Next.js UI (port 3000)
+cd web
+npm install
+npm run dev
+```
+
+Visit **http://localhost:3000** to explore:
+- **Overview (`/`)**: Live MTTR, resolved vs. open incidents, exposure avoided, and autonomy breakdown.
+- **Incidents (`/incidents`)**: Searchable, filterable list with full root-cause narratives, action timelines, cost breakdowns, and draft PR links.
+- **Pipeline (`/pipeline`)**: Stage-by-stage execution traces, real-time log streaming with level filters (INFO/WARN/ERROR/DEBUG), records/hr throughput, p95 latency, and error rate sparklines.
+- **Trends (`/trends`)**: 7/30/90-day time-series of incident frequencies, exposure amounts, and MTTR curves.
+- **Asset Health (`/assets`)**: Trust scores (0–100) and reliability grades (A–D) computed from assertion failures, drift, freshness lag, and past incidents.
+- **Runbooks (`/runbooks`)**: Autonomous `AgentSkill` runbooks synthesized from resolved incident post-mortems and registered in DataHub.
+- **Activity (`/activity`)**: Append-only action journal, manual fire drill trigger, and one-click rollback.
+- **Ask On-Call (`/chat`)**: Incident-grounded assistant with full Markdown rendering, code snippets, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
+
+### Populating Demo / Seed Data
+
+To populate the dashboard with realistic incidents, traces, and journal entries across all 14 change types and 12 production datasets:
+
+```bash
+python scripts/seed_incidents.py
+```
+
+This writes directly to `.sentinel/incidents.db` (SQLite) and `.sentinel/journal.jsonl`, generating 35+ realistic incidents with root causes, costs ($500–$25K), narratives, and action timelines.
 
 ---
 

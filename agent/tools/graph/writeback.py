@@ -17,10 +17,13 @@ stored twice in slightly different shapes.
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import datahub.emitter.mce_builder as builder
 from datahub.emitter.mcp import MetadataChangeProposalWrapper
 from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
 from datahub.metadata.schema_classes import (
+    EditableDatasetPropertiesClass,
     GlobalTagsClass,
     TagAssociationClass,
     TagPropertiesClass,
@@ -104,7 +107,9 @@ class DataHubWriteBack:
                 continue  # one unreachable asset must not block the rest
 
     def _rescore(self, pm: PostMortem, context: ContextBundle | None) -> None:
-        """Recompute the trust badge on the affected assets."""
+        """Recompute the trust badge on the affected assets and write a
+        catalog-visible health banner (grade + score + the $ impact of this
+        incident) where a human browsing the dataset will actually see it."""
         try:
             from agent.tools.graph.trust import TrustScorer
             from agent.tools.graph.urns import is_dataset
@@ -114,10 +119,43 @@ class DataHubWriteBack:
             if context:
                 targets.update(n.urn for n in context.downstream)
             for urn in targets:
-                if is_dataset(urn):
-                    scorer.score_and_publish(urn)
+                if not is_dataset(urn):
+                    continue
+                score = scorer.score(urn)
+                scorer.publish(score)                 # the grade tag (A/B/C/D)
+                self._write_health_banner(urn, score, pm)
         except Exception:
             pass  # a missing badge must never block closing an incident
+
+    def _write_health_banner(self, urn: str, score, pm: PostMortem) -> None:
+        """Put the health grade, the arithmetic behind it, and the dollar impact
+        of the incident into the asset's editable description — the 'About' box on
+        the catalog page, which survives re-ingestion."""
+        inputs = score.inputs or {}
+        signals = []
+        if inputs.get("failed_assertions"):
+            signals.append(f"{inputs['failed_assertions']} failed assertion(s)")
+        if inputs.get("open_incident"):
+            signals.append("open incident")
+        if inputs.get("past_incidents"):
+            signals.append(f"{inputs['past_incidents']} past incident(s)")
+
+        parts = [f"**Sentinel Health: {score.grade} ({score.score:.0f}/100)**",
+                 "Signals: " + (", ".join(signals) if signals else "none")]
+        if pm.estimated_impact_usd:
+            parts.append(f"Last incident `{pm.incident_id}`: "
+                         f"est. impact **${pm.estimated_impact_usd:,.0f}** "
+                         f"({pm.impact_basis})")
+        parts.append(f"_updated {datetime.now(timezone.utc):%Y-%m-%d %H:%M UTC} "
+                     f"by Sentinel_")
+        banner = "🛡 " + "  ·  ".join(parts)
+
+        try:
+            self.graph.emit_mcp(MetadataChangeProposalWrapper(
+                entityUrn=urn,
+                aspect=EditableDatasetPropertiesClass(description=banner)))
+        except Exception:
+            pass
 
     def _stamp_resolved(self, urn: str) -> None:
         try:

@@ -6,7 +6,10 @@
     python -m agent digest          what the agent did, or would have done
     python -m agent badges          recompute the health grade on every asset
     python -m agent runbooks        synthesise runbooks from resolved incidents
+    python -m agent notify          write role-tailored comms for open incidents
     python -m agent drill <name>    fire drill: break it on purpose, then heal it
+    python -m agent serve           start the webhook server (event-driven mode)
+    python -m agent incidents       list incidents from the local store, with stats
 
 Run a scenario first (`python -m scenarios <name>`) to give the loop something to
 find, or use `drill` to do both in one step.
@@ -33,6 +36,8 @@ def main() -> None:
 
     if args.command == "digest":
         return _digest()
+    if args.command == "incidents":
+        return _incidents()
 
     llm = LLMClient()
     if llm.available():
@@ -44,9 +49,13 @@ def main() -> None:
         return _badges()
     if args.command == "runbooks":
         return _runbooks(llm)
+    if args.command == "serve":
+        return _serve(llm)
 
     agent, mechanisms = _build_agent(args, llm)
 
+    if args.command == "notify":
+        return _notify(agent)
     if args.command == "drill":
         return _drill(agent, mechanisms, args.scenario)
 
@@ -62,7 +71,8 @@ def main() -> None:
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="agent")
     ap.add_argument("command", nargs="?", default="run",
-                    choices=["run", "digest", "badges", "runbooks", "drill"],
+                    choices=["run", "digest", "badges", "runbooks", "notify", "drill",
+                             "serve", "incidents"],
                     help="what to do (default: run the loop)")
     ap.add_argument("scenario", nargs="?", help="scenario name, for `drill`")
     ap.add_argument("--fake", action="store_true", help="use canned mechanisms")
@@ -80,11 +90,31 @@ def _build_agent(args, llm) -> tuple[SentinelAgent, object]:
         from agent.tools.mechanisms.composite import RealMechanisms
         from memory.base import get_memory
 
-        memory = get_memory()  # DataHub-backed incident memory
+        memory = get_memory()
         mechanisms = RealMechanisms(llm=llm, memory=memory)
 
-    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, shadow=args.shadow)
+    notifier = _get_notifier()
+    pager = _get_pager()
+    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, shadow=args.shadow,
+                          notifier=notifier)
+    agent.pager = pager
     return agent, mechanisms
+
+
+def _get_notifier():
+    try:
+        from agent.integrations.slack import shared_slack
+        return shared_slack()
+    except Exception:
+        return None
+
+
+def _get_pager():
+    try:
+        from agent.integrations.pagerduty import shared_pagerduty
+        return shared_pagerduty()
+    except Exception:
+        return None
 
 
 # --------------------------------------------------------------------------- #
@@ -92,6 +122,36 @@ def _digest() -> None:
     from agent.reporting.digest import SavingsDigest
 
     print(SavingsDigest().build().render())
+
+
+def _incidents() -> None:
+    """What the agent has handled, read back from the incident store."""
+    from agent.store import shared_store
+
+    store = shared_store()
+    rows = store.list(limit=25)
+    if not rows:
+        print("\nNo incidents recorded yet — run the loop first.")
+        return
+
+    stats = store.stats()
+    mttr = stats["mttr_minutes"]
+    print(f"\n  {stats['total']} incident(s): {stats['resolved']} resolved, "
+          f"{stats['open']} open")
+    if mttr is not None:
+        print(f"  mean time to close: {mttr:.1f} min")
+    if stats["exposure_usd"]:
+        print(f"  total exposure    : ${stats['exposure_usd']:,.0f}")
+    if stats["by_change_type"]:
+        kinds = ", ".join(f"{k} x{n}" for k, n in stats["by_change_type"].items())
+        print(f"  by change type    : {kinds}")
+
+    print(f"\n  {'incident':12s} {'asset':22s} {'change':22s} {'status':12s} cost")
+    print(f"  {'-' * 76}")
+    for r in rows:
+        cost = f"${r['cost_usd']:,.0f}" if r["cost_usd"] else "-"
+        print(f"  {r['id']:12s} {(r['asset_name'] or '?')[:22]:22s} "
+              f"{(r['change_type'] or '?')[:22]:22s} {r['status']:12s} {cost}")
 
 
 def _badges() -> None:
@@ -133,6 +193,116 @@ def _runbooks(llm) -> None:
     for change_type, urn, count in registered:
         print(f"  registered runbook for {change_type} "
               f"(from {count} incidents) -> {urn}")
+
+
+def _notify(agent: SentinelAgent) -> None:
+    """For every open incident, write the three role-tailored messages.
+
+    Prints the messages to stdout AND posts them to Slack when configured.
+    """
+    from agent.reporting.comms import compose
+    from agent.reporting.cost import CostEstimator
+
+    incidents = agent.m.detect_incidents()
+    if not incidents:
+        print("\nNo open incidents to notify about.")
+        return
+
+    estimator = CostEstimator()
+    notifier = agent.notifier
+    print(f"\n{len(incidents)} open incident(s):")
+    for inc in incidents:
+        ctx = agent.m.read_context(inc.asset_urn)
+        rca = agent.rca.analyze(inc, ctx)
+        cost = estimator.estimate(ctx, rca.change_type.value)
+        messages = compose(inc, ctx, rca, cost)
+        print(f"\n{'=' * 70}\n=== {inc.id}: {inc.summary} ===")
+        print(messages.render())
+        if notifier:
+            notifier.announce(inc, ctx, rca, cost)
+
+
+def _serve(llm) -> None:
+    """Start the webhook server — event-driven agent runs."""
+    import uvicorn
+
+    from agent.integrations.webhooks.config import WebhookConfig
+    from agent.integrations.webhooks.router import AgentRunRequest
+    from agent.integrations.webhooks.server import app, configure
+
+    cfg = WebhookConfig.load()
+    if not cfg.enabled:
+        print("\nWebhook server is disabled (set enabled: true in "
+              "config/webhooks.yaml)")
+        return
+
+    notifier = _get_notifier()
+    pager = _get_pager()
+
+    from agent.tools.mechanisms.composite import RealMechanisms
+    from memory.base import get_memory
+
+    memory = get_memory()
+    mechanisms = RealMechanisms(llm=llm, memory=memory)
+
+    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, notifier=notifier)
+    agent.pager = pager
+
+    def run_agent(request: AgentRunRequest) -> None:
+        print(f"\n  [webhook  ] incoming {request.source} event "
+              f"-> {request.asset_urn}")
+        incidents = agent.m.detect_incidents()
+        matched = [i for i in incidents if i.asset_urn == request.asset_urn]
+        if not matched and request.asset_urn == "__git_push__":
+            matched = incidents
+        if matched:
+            for inc in matched:
+                agent.handle(inc)
+        else:
+            print(f"  [webhook  ] no open incident for {request.asset_urn} — "
+                  f"running full sweep")
+            agent.run()
+
+    configure(cfg, run_agent)
+
+    from api.server import attach as attach_graphql
+
+    attach_graphql(app)
+
+    sweep_minutes = cfg.sweep_interval_minutes
+    if sweep_minutes > 0:
+        import threading
+
+        def _sweep_loop():
+            import time
+            while True:
+                time.sleep(sweep_minutes * 60)
+                print(f"\n  [sweep    ] periodic sweep ({sweep_minutes}m interval)")
+                try:
+                    agent.run()
+                except Exception as exc:
+                    print(f"  [sweep    ] error: {exc}")
+
+        t = threading.Thread(target=_sweep_loop, daemon=True)
+        t.start()
+
+    enabled_sources = [s for s, sc in cfg.sources.items() if sc.enabled]
+    print(f"\nWebhook server starting on http://{cfg.server.host}:{cfg.server.port}")
+    print(f"  Sources: {', '.join(enabled_sources)}")
+    print(f"  Workers: {cfg.server.workers}")
+    if sweep_minutes > 0:
+        print(f"  Sweep: every {sweep_minutes}m")
+    else:
+        print(f"  Sweep: disabled")
+    print(f"\nEndpoints:")
+    for source in enabled_sources:
+        print(f"  POST /webhook/{source}")
+    print(f"  GET  /health")
+    print(f"  GET  /runs")
+    print(f"  POST /graphql   (dashboard reads — GraphiQL at this path in a browser)\n")
+
+    uvicorn.run(app, host=cfg.server.host, port=cfg.server.port,
+                log_level="info")
 
 
 def _drill(agent: SentinelAgent, mechanisms, scenario: str | None) -> None:

@@ -1,14 +1,14 @@
 {
-  "scored_at": "2026-08-07T18:51:46.163294+00:00",
+  "scored_at": "2026-08-08T14:42:31.192528+00:00",
   "model": "fraud_detection_model@champion",
   "n_scored": 8000,
-  "positive_pred_rate": 0.007875,
-  "mean_score": 0.030165517099842377,
+  "positive_pred_rate": 0.007625,
+  "mean_score": 0.03158318999432037,
   "feature_means": {
-    "amount": 60.414263749999996,
-    "avg_txn_amount": 60.414263749999996,
+    "amount": 84.57996924999999,
+    "avg_txn_amount": 84.57996924999999,
     "user_txn_count": 27.768,
-    "stddev_txn_amount": 67.30649640182455,
+    "stddev_txn_amount": 94.22909496255437,
     "merchant_fraud_rate": 0.030625,
     "merchant_txn_count": 134.2515,
     "is_risky_category": 0.30075

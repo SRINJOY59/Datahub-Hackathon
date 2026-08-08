@@ -20,7 +20,7 @@ from agent.contracts import ContextBundle, Evidence, Incident
 from agent.registry import probe
 from agent.tools.code.git_history import GitHistory
 from agent.tools.graph.urns import is_dataset
-from memory.codebase import CodebaseMemory
+from memory.codebase import shared_codebase
 
 # Any incident whose cause could plausibly be someone changing the pipeline.
 _ATTRIBUTABLE = {
@@ -42,7 +42,7 @@ class GitBlameProbe:
 
     def __init__(self, gms_server: str = "http://localhost:8080") -> None:
         self.git = GitHistory()
-        self.codebase = CodebaseMemory()
+        self.codebase = shared_codebase()
 
     def applies_to(self, incident: Incident) -> bool:
         return incident.signal_type.value in _ATTRIBUTABLE

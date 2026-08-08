@@ -21,19 +21,13 @@ has to be brought in regardless.
 from __future__ import annotations
 
 from agent.contracts import (
+    PROTECTIVE_ACTIONS,
     ActionType,
     AutonomyTier,
     ContextBundle,
     RootCauseAnalysis,
+    is_protective,
 )
-
-PROTECTIVE_ACTIONS = {ActionType.TAG_ASSET, ActionType.PAUSE_JOB}
-MUTATING_ACTIONS = {
-    ActionType.PIN_FEATURE,
-    ActionType.QUARANTINE,
-    ActionType.DEDUPE_PARTITION,
-    ActionType.REPOINT_MODEL,
-}
 
 PII_TAG = "PII"
 CRITICAL_TAG = "Tier-Critical"
@@ -84,9 +78,9 @@ class AutonomyPolicy:
         """Should a fix PR be opened and the owners told, even on success?"""
         return tier in (AutonomyTier.PR_ONLY, AutonomyTier.HUMAN_ONLY)
 
-    @staticmethod
-    def is_protective(action_type: ActionType) -> bool:
-        return action_type in PROTECTIVE_ACTIONS
+    # kept as a method so callers holding a policy can classify without a second
+    # import; the single definition lives in contracts.
+    is_protective = staticmethod(is_protective)
 
     @staticmethod
     def is_containment_only(actions: list) -> bool:

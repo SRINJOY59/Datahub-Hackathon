@@ -16,7 +16,7 @@ from pathlib import Path
 
 from agent.contracts import Incident, SignalType
 from agent.registry import detector
-from memory.codebase import CodebaseMemory
+from memory.codebase import shared_codebase
 
 ADVISORIES_DIR = Path(__file__).resolve().parents[3] / ".sentinel" / "advisories"
 
@@ -37,7 +37,7 @@ class DependencyChangeDetector:
     name = "dependency_advisories"
 
     def __init__(self, gms_server: str = "http://localhost:8080") -> None:
-        self.codebase = CodebaseMemory()
+        self.codebase = shared_codebase()
 
     def detect(self) -> list[Incident]:
         if not ADVISORIES_DIR.exists():

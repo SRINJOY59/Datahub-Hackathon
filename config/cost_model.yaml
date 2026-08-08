@@ -1,0 +1,44 @@
+# Sentinel cost model — the assumptions behind the "estimated impact" figure.
+#
+# Sentinel does NOT invent a dollar amount. It measures the real blast radius of
+# each incident (the downstream consumers it reads from the lineage graph) and
+# applies the rates below — which are YOURS to set. The figure is only ever as
+# good as these numbers, so it always cites them.
+#
+# Replace the illustrative defaults with your team's own figures. If you do not
+# want dollar estimates at all, set `enabled: false` and Sentinel reports the
+# blast-radius facts (how many consumers of what kind) without a currency figure.
+
+enabled: true
+currency: "USD"
+
+# How long an incident of this kind typically runs before a human catches and
+# fixes it WITHOUT automation. The exposure Sentinel "avoids" is what would have
+# accrued over this window. Set this from your own incident history — it is the
+# single biggest lever on the number, so do not leave it at a guess.
+assumed_mttr_hours: 4
+
+# What one affected consumer is worth per hour it serves or acts on wrong data,
+# by the kind of thing it is. ILLUSTRATIVE — replace with your reality.
+per_consumer_hour:
+  mlModelDeployment: 3000    # a model scoring live traffic on bad data
+  mlModel: 1500              # a model whose outputs feed decisions
+  dataset: 400               # a table/dashboard people make decisions from
+  dataJob: 200               # a pipeline doing wrong work
+  default: 400
+
+# Some failure modes are worse per hour than others (a leaked label ships an
+# overconfident model; a dependency break is caught before it ever runs in prod).
+severity_multiplier:
+  label_leakage: 1.5
+  training_regression: 1.2
+  model_drift: 1.2
+  scale_shift: 1.0
+  null_spike: 1.0
+  schema_change: 1.0
+  volume_anomaly: 0.9
+  duplicate_records: 0.8
+  distribution_drift: 0.8
+  freshness_lag: 0.7
+  dependency_change: 0.5
+  default: 1.0

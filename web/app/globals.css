@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+:root {
+  --background: #08090b;
+  --surface: #0e1014;
+  --surface-raised: #14171d;
+  --surface-hover: #181c23;
+  --border: #1f232b;
+  --border-strong: #2a2f39;
+  --foreground: #e8eaed;
+  --muted: #8b9099;
+  --muted-dim: #5a606b;
+  --accent: #3987e5;
+  --accent-soft: rgba(57, 135, 229, 0.12);
+  --accent-glow: rgba(57, 135, 229, 0.35);
+
+  /* dataviz skill — status palette (fixed, dark steps), never repurposed
+     for series identity */
+  --status-good: #0ca30c;
+  --status-good-soft: rgba(12, 163, 12, 0.14);
+  --status-warn: #fab219;
+  --status-warn-soft: rgba(250, 178, 25, 0.14);
+  --status-serious: #ec835a;
+  --status-serious-soft: rgba(236, 131, 90, 0.14);
+  --status-bad: #d03b3b;
+  --status-bad-soft: rgba(208, 59, 59, 0.14);
+  --status-info: #3987e5;
+  --status-info-soft: rgba(57, 135, 229, 0.14);
+
+  /* dataviz skill — validated dark categorical order, fixed, never cycled */
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+  --series-5: #d55181;
+  --series-6: #008300;
+  --series-7: #9085e9;
+  --series-8: #e66767;
+
+  --chart-surface: #101318;
+  --chart-gridline: #1c2027;
+  --chart-baseline: #2a2f39;
+  --chart-ink-secondary: #a8adb6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-hover: var(--surface-hover);
+  --color-border: var(--border);
+  --color-border-strong: var(--border-strong);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-dim: var(--muted-dim);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-good: var(--status-good);
+  --color-good-soft: var(--status-good-soft);
+  --color-warn: var(--status-warn);
+  --color-warn-soft: var(--status-warn-soft);
+  --color-serious: var(--status-serious);
+  --color-serious-soft: var(--status-serious-soft);
+  --color-bad: var(--status-bad);
+  --color-bad-soft: var(--status-bad-soft);
+  --color-info: var(--status-info);
+  --color-info-soft: var(--status-info-soft);
+  --color-series-1: var(--series-1);
+  --color-series-2: var(--series-2);
+  --color-series-3: var(--series-3);
+  --color-series-4: var(--series-4);
+  --color-series-5: var(--series-5);
+  --color-series-6: var(--series-6);
+  --color-series-7: var(--series-7);
+  --color-series-8: var(--series-8);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  /* A barely-there grid, the way a console feels like an instrument rather
+     than a document. Fixed so it doesn't parallax while scrolling. */
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.014) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.014) 1px, transparent 1px);
+  background-size: 44px 44px;
+  background-attachment: fixed;
+}
+
+::selection {
+  background: var(--accent-soft);
+}
+
+.card {
+  background: linear-gradient(180deg, var(--surface) 0%, rgba(14, 16, 20, 0.75) 100%);
+  border: 1px solid var(--border);
+  border-radius: 0.875rem;
+  transition: border-color 160ms ease, transform 160ms ease;
+}
+
+.card-interactive:hover {
+  border-color: var(--border-strong);
+}
+
+/* The accent rule that makes a panel read as "this is the live one". */
+.card-accent {
+  position: relative;
+  overflow: hidden;
+}
+.card-accent::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--accent-glow),
+    transparent
+  );
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background: var(--muted-dim);
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70% { box-shadow: 0 0 0 5px rgba(57, 135, 229, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(57, 135, 229, 0); }
+}
+.pulse-live {
+  animation: pulse-ring 2.4s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes shimmer {
+  100% { transform: translateX(100%); }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-raised);
+  border-radius: 0.5rem;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(255, 255, 255, 0.04),
+    transparent
+  );
+  animation: shimmer 1.6s infinite;
+}
+
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.fade-up {
+  animation: fade-up 260ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pulse-live,
+  .skeleton::after,
+  .fade-up {
+    animation: none;
+  }
+}
