@@ -32,6 +32,10 @@ slack-sdk>=3.27,<4
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
 
+# --- Dashboard read API (GraphQL over the incident store: python -m api) ---
+strawberry-graphql[fastapi]>=0.235,<1
+requests>=2.31,<3  # was transitive; api/resolvers.py now imports it directly
+
 # --- Config / utils ---
 python-dotenv>=1.0.0
 pyyaml>=6.0

@@ -1,0 +1,16 @@
+# Dashboard actuation — the ONLY write path the web UI has.
+#
+# SECURITY: these endpoints have no authentication. Anyone who can reach the
+# API port can fire them. That is acceptable for a laptop/demo where the
+# server binds locally; it is NOT acceptable on a shared or public host.
+# Before exposing this beyond localhost, put an authenticating proxy in front
+# of it or set allow_actions: false.
+
+actions:
+  enabled: true
+
+  # Each action is separately switchable, so a deployment can allow the
+  # harmless one (rescore) without allowing the destructive ones.
+  allow_drill: true       # inject a failure on purpose, then let the agent heal it
+  allow_rollback: true    # undo an incident's actions through the journal
+  allow_rescore: true     # recompute trust badges (read-heavy, writes tags only)

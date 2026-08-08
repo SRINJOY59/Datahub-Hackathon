@@ -377,7 +377,41 @@ change data or what is serving.
 |---|---|---|
 | `auto` | no sensitive tags, high confidence, small blast radius | acts, no PR needed |
 | `pr_only` | `Tier-Critical` / `PII` / low confidence / wide blast radius | mitigates now, opens a fix for review |
-| `human_only` | `PII` **and** confidence below high | protective actions only, pages the owners |
+---
+
+## Web Dashboard & Pipeline Observability
+
+The Next.js dashboard provides a live command center for data engineers and on-call operators:
+
+```bash
+# In terminal 1: Start the Sentinel backend & webhook server (port 8090)
+python -m agent serve
+
+# In terminal 2: Start the Next.js UI (port 3000)
+cd web
+npm install
+npm run dev
+```
+
+Visit **http://localhost:3000** to explore:
+- **Overview (`/`)**: Live MTTR, resolved vs. open incidents, exposure avoided, and autonomy breakdown.
+- **Incidents (`/incidents`)**: Searchable, filterable list with full root-cause narratives, action timelines, cost breakdowns, and draft PR links.
+- **Pipeline (`/pipeline`)**: Stage-by-stage execution traces, real-time log streaming with level filters (INFO/WARN/ERROR/DEBUG), records/hr throughput, p95 latency, and error rate sparklines.
+- **Trends (`/trends`)**: 7/30/90-day time-series of incident frequencies, exposure amounts, and MTTR curves.
+- **Asset Health (`/assets`)**: Trust scores (0–100) and reliability grades (A–D) computed from assertion failures, drift, freshness lag, and past incidents.
+- **Runbooks (`/runbooks`)**: Autonomous `AgentSkill` runbooks synthesized from resolved incident post-mortems and registered in DataHub.
+- **Activity (`/activity`)**: Append-only action journal, manual fire drill trigger, and one-click rollback.
+- **Ask On-Call (`/chat`)**: Incident-grounded assistant with full Markdown rendering, code snippets, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
+
+### Populating Demo / Seed Data
+
+To populate the dashboard with realistic incidents, traces, and journal entries across all 14 change types and 12 production datasets:
+
+```bash
+python scripts/seed_incidents.py
+```
+
+This writes directly to `.sentinel/incidents.db` (SQLite) and `.sentinel/journal.jsonl`, generating 35+ realistic incidents with root causes, costs ($500–$25K), narratives, and action timelines.
 
 ---
 

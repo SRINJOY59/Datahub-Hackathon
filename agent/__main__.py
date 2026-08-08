@@ -265,6 +265,10 @@ def _serve(llm) -> None:
 
     configure(cfg, run_agent)
 
+    from api.server import attach as attach_graphql
+
+    attach_graphql(app)
+
     sweep_minutes = cfg.sweep_interval_minutes
     if sweep_minutes > 0:
         import threading
@@ -294,7 +298,8 @@ def _serve(llm) -> None:
     for source in enabled_sources:
         print(f"  POST /webhook/{source}")
     print(f"  GET  /health")
-    print(f"  GET  /runs\n")
+    print(f"  GET  /runs")
+    print(f"  POST /graphql   (dashboard reads — GraphiQL at this path in a browser)\n")
 
     uvicorn.run(app, host=cfg.server.host, port=cfg.server.port,
                 log_level="info")

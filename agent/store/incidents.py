@@ -194,6 +194,28 @@ class IncidentStore:
             rows = conn.execute(sql, params).fetchall()
         return [_row_to_dict(r) for r in rows]
 
+    def search(self, keywords: list[str], limit: int = 8) -> list[dict]:
+        """Keyword match across the fields a plain-English question would
+        reference. This is SQL LIKE, not semantic search — honest about what
+        it is rather than dressed up as the vector recall the roadmap still
+        lists as unbuilt."""
+        if not keywords:
+            return []
+        fields = ("asset_name", "asset_urn", "summary", "narrative",
+                  "change_type", "root_cause_asset")
+        clause = " OR ".join(f"{f} LIKE ?" for f in fields)
+        where = " OR ".join(f"({clause})" for _ in keywords)
+        params: list = []
+        for kw in keywords:
+            params.extend([f"%{kw}%"] * len(fields))
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM incidents WHERE {where} "
+                f"ORDER BY detected_at DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        return [_row_to_dict(r) for r in rows]
+
     def stats(self) -> dict:
         with self._connect() as conn:
             totals = conn.execute(
@@ -221,6 +243,43 @@ class IncidentStore:
             "mttr_minutes": totals["mttr_minutes"],
             "by_change_type": {r["change_type"] or "unknown": r["n"] for r in by_type},
         }
+
+    def daily_series(self, days: int = 30) -> list[dict]:
+        """Per-day counts, cost and mean time-to-close.
+
+        Buckets on substr(detected_at, 1, 10) rather than SQLite's date():
+        the stored value is a full ISO timestamp with fractional seconds and a
+        +00:00 offset, and slicing the leading YYYY-MM-DD is exact regardless
+        of how the driver's date parser feels about that format.
+        """
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    substr(detected_at, 1, 10)                 AS day,
+                    COUNT(*)                                   AS total,
+                    SUM(resolved)                              AS resolved,
+                    SUM(COALESCE(cost_usd, 0))                 AS exposure_usd,
+                    AVG(CASE WHEN closed_at IS NOT NULL
+                        THEN (julianday(closed_at) - julianday(detected_at))
+                             * 24 * 60 END)                    AS mttr_minutes
+                FROM incidents
+                GROUP BY day
+                ORDER BY day DESC
+                LIMIT ?
+                """,
+                (days,),
+            ).fetchall()
+        out = []
+        for r in reversed(rows):  # oldest first, for plotting
+            out.append({
+                "day": r["day"],
+                "total": r["total"] or 0,
+                "resolved": r["resolved"] or 0,
+                "exposure_usd": r["exposure_usd"] or 0.0,
+                "mttr_minutes": r["mttr_minutes"],
+            })
+        return out
 
     def export(self) -> list[dict]:
         """Everything as JSON — a .db is not cat-able, so keep a way out."""

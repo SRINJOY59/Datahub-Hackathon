@@ -31,9 +31,9 @@ is signed off.
 | **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
 | **2** | Six new threat classes (detectors, probes, scenarios) | ✅ |
 | **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ✅ |
-| **4** | Verification: `scenarios verify` matrix (each scenario run through the agent, checked against its `Expectation`) | ✅ (offline pytest suite still ⬜) |
+| **4** | Verification: `scenarios verify` matrix (each scenario run through the agent, checked against its `Expectation`) | ✅ |
 | **5** | Cost meter, MCP Server reads, git-commit detector, structured `IncidentOutcome` + contract cleanup | ✅ |
-| **6** | *(optional)* Intelligence-plane remainder: #6 Comms, #12 Ask-the-On-Call | not scheduled |
+| **6** | Intelligence-plane UI & Ops: Full Web Dashboard, Pipeline Observability, Ask-the-On-Call with Markdown citations, scripts/seed_incidents.py modularization | ✅ |
 
 ### Who each phase serves
 
@@ -44,6 +44,8 @@ is signed off.
 | 2 | 6 detectors + probes; RCA signal→change-type map | RCA prompt quality; richer `PostMortem` corpus for #10 |
 | 3 | **#2** Drift Attribution, **#3** Parallel Universe, **#11** `inject_failure()` | **#8** Shadow Mode, **#9** Trust Badges, **#10** Runbook→Skill |
 | 4 | scenario expectation harness | **#11** fire-drill orchestration via `verify --all` |
+| 5 | git-commit detector, MCP server, `IncidentOutcome` | cost-of-incident estimator, Slack/PagerDuty notification formatting |
+| 6 | `scripts/seed_incidents.py` modularization, pipeline observability data | Next.js Dashboard (`/`, `/incidents`, `/pipeline`, `/trends`, `/assets`, `/runbooks`, `/activity`), Full Markdown Ask-On-Call chat (`/chat`) |
 
 Neither plane waits on the other: every phase moves both.
 
@@ -456,16 +458,13 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
   `.sentinel/journal.jsonl`, append-only and replayable (Phase 0).
 
 ## 6. Product surface (what users actually touch)
-- ⭐ **Slack/Teams integration** ⬜ — incident channel, audience-aware messages
-  (engineer vs analyst vs exec), approve-from-chat.
-- ⭐ **Web dashboard** ⬜ — incident list, timeline, RCA, blast radius, MTTR.
-- **Cost-of-incident meter** ✅ — dollar impact from the real blast radius ×
-  team-owned rates in `config/cost_model.yaml`, written into the asset's catalog
-  "About" box; cites its assumptions and can be disabled.
-- **Trust badges / health scores** ✅ — a 0-100 score and A–D grade written onto
-  each asset, refreshed whenever an incident closes.
-- **Ask-the-on-call** ⬜ — chat over incident memory.
-- **Paging** ⬜ — PagerDuty / Opsgenie for human-tier incidents.
+- ⭐ **Slack/Teams integration** ✅ — incident channel, audience-aware messages (`agent/reporting/comms.py`), interactive Socket Mode approvals.
+- ⭐ **Web dashboard** ✅ — Next.js live command center with Overview, Incidents, Pipeline Observability, Trends, Asset Health, Runbooks, and Activity audit trail.
+- **Pipeline Observability** ✅ — stage-by-stage traces, execution times, real-time log streaming with level filters, and throughput/latency/error-rate sparklines.
+- **Cost-of-incident meter** ✅ — dollar impact from the real blast radius × team-owned rates in `config/cost_model.yaml`, written into the asset's catalog "About" box; cites its assumptions.
+- **Trust badges / health scores** ✅ — a 0-100 score and A–D grade written onto each asset, refreshed whenever an incident closes.
+- **Ask-the-on-call** ✅ — grounded LLM chat over incident memory with full Markdown rendering, code blocks, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
+- **Paging** ✅ — PagerDuty routing for human-tier incidents (`shared_pagerduty`).
 
 ## 7. Platform & enterprise readiness
 - **Multi-warehouse** ⬜ — Snowflake / BigQuery / Databricks / Redshift (today: DuckDB).
