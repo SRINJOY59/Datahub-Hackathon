@@ -23,6 +23,7 @@ from typing import Optional
 
 from agent.contracts import (
     ActionRecord,
+    ActionType,
     AutonomyTier,
     ChangeType,
     ContextBundle,
@@ -99,14 +100,35 @@ class SentinelAgent:
 
     # --- remediation paths -------------------------------------------- #
     def _remediate_code(self, inc, ctx, rca) -> IncidentOutcome:
-        """A dependency or API break is fixed by changing code, so the
-        remediation is a pull request rather than a data action."""
+        """A code-level incident. When an automatic fix applies — a dependency or
+        API migration — the remediation is a pull request. When it doesn't — a
+        human's commit to a pipeline source — the agent cannot (and should not)
+        revert it: it flags the downstream assets and pages a reviewer, and the
+        incident is *contained*, not claimed as resolved."""
         pr = self.m.propose_fix(inc, ctx, rca.narrative)
-        log("fix", f"generated migration -> {pr}")
-        self._resolve(inc, ctx, rca, actions_taken=["propose_fix"],
-                      resolution=f"auto-migration: {pr}")
-        return self._outcome(inc, rca, "code_fix", resolved=True,
-                             actions=["propose_fix"], pr=pr)
+        if _is_artifact(pr):
+            log("fix", f"generated migration -> {pr}")
+            self._resolve(inc, ctx, rca, actions_taken=["propose_fix"],
+                          resolution=f"auto-migration: {pr}")
+            return self._outcome(inc, rca, "code_fix", resolved=True,
+                                 actions=["propose_fix"], pr=pr)
+
+        log("fix", "no automatic fix applies — flagging downstream and paging a "
+                   "human to review the change")
+        actions = [ActionRecord(action_type=ActionType.TAG_ASSET, target=n.urn,
+                                params={"tag": "do-not-trust"},
+                                note="downstream of an unreviewed code change",
+                                incident_id=inc.id)
+                   for n in ctx.downstream]
+        journal = self._apply(actions)
+        applied = [a.action_type.value for a in journal if a.status == "applied"]
+        self._escalate(inc, ctx, rca, AutonomyTier.HUMAN_ONLY,
+                       reason="code change needs human review")
+        self._resolve(inc, ctx, rca, actions_taken=applied,
+                      resolution="contained: downstream flagged, change awaiting "
+                                 "human review",
+                      resolved=False)
+        return self._outcome(inc, rca, "contained", resolved=False, actions=applied)
 
     def _remediate_data(self, inc, ctx, rca, tier: AutonomyTier) -> IncidentOutcome:
         actions, withheld = self.planner.plan(rca, ctx, tier)

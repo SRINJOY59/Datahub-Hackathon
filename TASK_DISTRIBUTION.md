@@ -31,8 +31,9 @@ is signed off.
 | **1** | Real mechanisms: `run_checks` / `act` / `undo` / `write_back`, planner + policy | ✅ |
 | **2** | Six new threat classes (detectors, probes, scenarios) | ✅ |
 | **3** | Drift Attribution, Fire Drill, Parallel Universe, Shadow Mode, Trust Badges, Runbook→Skill | ✅ |
-| **4** | Verification: `scenarios verify --all` matrix + offline pytest suite | ⬜ |
-| **5** | *(optional)* Intelligence-plane remainder: #6 Comms, #7 Cost Meter, #12 Ask-the-On-Call, git-commit detector | not scheduled |
+| **4** | Verification: `scenarios verify` matrix (each scenario run through the agent, checked against its `Expectation`) | ✅ (offline pytest suite still ⬜) |
+| **5** | Cost meter, MCP Server reads, git-commit detector, structured `IncidentOutcome` + contract cleanup | ✅ |
+| **6** | *(optional)* Intelligence-plane remainder: #6 Comms, #12 Ask-the-On-Call | not scheduled |
 
 ### Who each phase serves
 
@@ -189,6 +190,36 @@ prose — the tool list lives inside `instructions` instead.
   unavailable during exactly the incidents where a rollback gets proposed. It now
   scores the rows it can.
 
+### Phase 4 — what landed
+
+*Every scenario is now an executable test, not something a human eyeballs.*
+
+- **`scenarios/verify.py` + `python -m scenarios verify [name ...]`** — runs each
+  scenario through the *real* agent and asserts its declared `Expectation`:
+  change-type, root asset/column, actions taken, resolved-vs-contained, and — for
+  the silent scenarios — that dbt genuinely stayed green (proving detection did
+  not lean on assertions). Nonzero exit on any failure, so it can gate a commit.
+- **`handle()` now returns a structured `IncidentOutcome`** (status, change-type,
+  root cause, actions, resolved, PR) instead of only printing. The harness — and
+  any future API or dashboard — checks that object rather than scraping logs.
+
+### Phase 5 — what landed
+
+*Deeper Use-of-DataHub, an honest cost figure, and the last detector class.*
+
+| Feature | How it works |
+|---|---|
+| **Reads DataHub via the MCP Server** | `agent/tools/mcp/` — Sentinel reads lineage and schema through the official `mcp-server-datahub` (the same server Claude Desktop/Cursor use), launched isolated via `uvx`, `SENTINEL_USE_MCP=1`, SDK fallback with verified parity. |
+| **#7 Cost-of-Incident Meter** | `agent/reporting/cost.py` — measures the real blast radius from the graph and applies rates from a team-owned `config/cost_model.yaml`; the score, inputs and dollar impact are written into the asset's editable description (catalog "About" box), not just a grade tag. Disable-able; cites its assumptions. |
+| **Git-commit detector** | `GitCommitDetector` — a commit to a pipeline source is a `CODE_CHANGE` signal, attributed via git and mapped to the impacted asset through `CodebaseMemory`. A human commit is *contained* (downstream flagged, owner paged), not falsely resolved. |
+| **`CodebaseMemory` upgraded** | AST-based indexing (robust imports + defined symbols), cached and shared via `shared_codebase()`, O(1) asset→file reverse lookup, enriched producer map, and `pipeline_source_files()`/`defines()`/`symbols_in()`/`all_packages()`. |
+
+**Contract cleanup this phase:** `rollback` / `release_containment` /
+`write_back(resolved=)` are now first-class on the `Mechanisms` Protocol (the
+orchestrator's `getattr`/`TypeError` compat shims are gone); `PROTECTIVE_ACTIONS`
+/ `is_protective` moved next to `ActionType` as the single classifier; added
+`CostEstimate` and `IncidentOutcome`. All additive — nothing renamed or removed.
+
 ---
 
 ## Shared foundation (done — Srinjoy)
@@ -203,8 +234,10 @@ prose — the tool list lives inside `instructions` instead.
 | Core LLM client (`agent/llm.py`, OpenRouter) + structured output | ✅ |
 | Extensible platform: Detector/Probe/**Actuator**/**CheckRunner**/Memory registries | ✅ |
 | Grounded RCA engine (`agent/rca.py`) — probes + memory + structured synthesis | ✅ |
-| Pluggable memory: `DataHubMemory` (record/recall) + `CodebaseMemory` | ✅ |
+| Pluggable memory: `DataHubMemory` (record/recall) + AST-indexed `CodebaseMemory` | ✅ |
 | Remediation foundation: journal, snapshots, baselines, dbt/model/git readers | ✅ |
+| Reads DataHub via the official **MCP Server** (`agent/tools/mcp/`, SDK fallback) | ✅ |
+| Verification harness (`scenarios verify`) + structured `IncidentOutcome` | ✅ |
 
 ### Incident classes implemented (each a Detector + Probe plugin)
 
@@ -213,7 +246,8 @@ prose — the tool list lives inside `instructions` instead.
 | Data (assertion + profiling) | DataHubAssertion / DataProfile + ColumnLineage | ✅ |
 | Dependency / API break ("self-maintaining APIs") | DependencyChange / DependencyImpact + CodeFixTool | ✅ |
 | ML training regression | TrainingMetric / ModelEval | ✅ |
-| Model drift / freshness / git-commit | — | ⬜ (new plugins) |
+| Model drift · freshness · volume · leakage · skew · duplicates | six Phase-2 detectors + probes | ✅ |
+| Git-commit-as-signal | GitCommitDetector + GitBlameProbe | ✅ |
 
 ---
 
@@ -274,7 +308,7 @@ than cut from the bottom.
 | Label leakage | **2** | ✅ |
 | Duplicate records | **2** | ✅ (reuses the assertion detector; new probe + remediation) |
 | Training/serving skew | **2** | ✅ |
-| **Git-commit-as-signal** | **not scheduled** | ⬜ — see Not scheduled below |
+| **Git-commit-as-signal** | **5** | ✅ — `GitCommitDetector`, contained + owner paged |
 
 ---
 
@@ -291,28 +325,27 @@ Builds entirely against `fakes.py` until Srinjoy's real tools land — no blocki
 | 10 | **Runbook → DataHub Skill** — synthesize a runbook, register as a Skill (also the OSS-contribution PR) | Memory (#5) + Skill registration | **3** | ✅ registered as a real `AgentSkill` entity |
 | 11 | **Fire Drill orchestration** — drive `inject_failure()` to prove self-healing | `inject_failure()` | **3 + 4** | ✅ `python -m agent drill <scenario>`; matrix in Phase 4 |
 | — | **RCA prompt quality** — refine `agent/prompts/rca.py` and structured-output parsing | LLM client (shared) | **0 + 2** | 🔨 enum-parity fix landed Phase 0; signal→change-type map in Phase 2 |
+| 7 | **Cost-of-Incident Meter** — $ estimate from the real blast radius × team-owned rates | `ContextBundle.downstream` + `config/cost_model.yaml` | **5** | ✅ written into the catalog "About" box beside the trust grade |
 | 6 | **Audience-Aware Comms** — one incident → 3 tailored messages | `ContextBundle.owners`, `tags` | **not scheduled** | ⬜ unblocked, not built |
-| 7 | **Cost-of-Incident Meter** — $ estimate from blast radius × usage | `ContextBundle.downstream` + usage stats | **not scheduled** | ⬜ unblocked, not built |
 | 12 | **Ask the On-Call** — chat over incident memory | Memory (#5) | **not scheduled** | ⬜ unblocked, not built |
 
-**Intelligence-plane coverage: 6/9 complete, 3 not scheduled** (#6, #7, #12 —
+**Intelligence-plane coverage: 7/9 complete, 2 not scheduled** (#6, #12 —
 see below).
 
 ### Not scheduled — and why
 
-Four items sit outside the current phase plan. This is a scope decision, not an
+Two items sit outside the current phase plan. This is a scope decision, not an
 oversight, and each is genuinely unblocked: the contract surface it needs already
 exists and is exercised by working code.
 
 | Item | What it would need | Why it is unblocked today |
 |---|---|---|
 | #6 Audience-Aware Comms | a formatter over an incident + its owners | `ContextBundle.owners` / `tags` are real; `PostMortem` carries the narrative and blast radius |
-| #7 Cost-of-Incident Meter | blast radius × a usage/cost model | `ContextBundle.downstream` is real; `ActionJournal` timestamps give incident duration |
 | #12 Ask the On-Call | a chat loop over recalled post-mortems | `MemoryStore.recall()` works and already returns cited precedent |
-| Git-commit-as-signal detector | a `@detector` reading recent commits to pipeline sources | `GitHistory` (Phase 0) + `CodebaseMemory.source_file_for()` (Phase 0) do the reading; only the detector wrapper is missing |
 
-Adding them would be a **Phase 5**. Each is small precisely because the phases
-below built the surfaces they consume.
+Each is small precisely because the phases above built the surfaces they consume.
+(#7 Cost Meter and the Git-commit detector were on this list; both shipped in
+Phase 5.)
 
 ---
 
@@ -336,11 +369,13 @@ below built the surfaces they consume.
 
 # Product Roadmap — what makes this a real product
 
-The current build proves **detection + grounded RCA + fix generation** across
-three incident classes. To become a product a data/ML/platform team pays for, the
-gaps are actuation (safe, reversible fixes), coverage (more signals + warehouses),
-and the product surface (comms, dashboard, autonomy controls). Everything below is
-a candidate; MVP-critical items are marked ⭐.
+The current build proves the full loop — **detect → grounded RCA → reversible
+remediation → validate → rollback/contain → write-back** — across ~11 incident
+classes, with trust badges, a cost meter, verification, and DataHub reads through
+the MCP Server. The remaining gaps to a product a data/ML/platform team pays for
+are the product surface (comms, dashboard, approvals) and platform readiness
+(more warehouses, deployment, scale). Everything below is a candidate; MVP-
+critical items are marked ⭐.
 
 Status: ✅ done · 🔨 partial · ⬜ not started
 
@@ -379,7 +414,9 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
   leaking feature named by correlation dominance.
 - **Training/serving-skew detector** ✅ — serving feature means vs the champion's
   logged training distribution.
-- **Git-commit detector** ⬜ — a commit to a transform/model/prompt as a signal.
+- **Git-commit detector** ✅ — a commit to a pipeline source is a signal,
+  attributed to its author/sha and mapped to the impacted asset; contained +
+  owner paged (a human commit is flagged, not auto-reverted).
 - **Real dependency diff** 🔨 — diff `requirements`/`poetry.lock` over time (today
   we read hand-authored advisories); ingest vendor changelogs / GitHub releases /
   OpenAPI-spec diffs to auto-derive breaking changes.
@@ -422,7 +459,9 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 - ⭐ **Slack/Teams integration** ⬜ — incident channel, audience-aware messages
   (engineer vs analyst vs exec), approve-from-chat.
 - ⭐ **Web dashboard** ⬜ — incident list, timeline, RCA, blast radius, MTTR.
-- **Cost-of-incident meter** ⬜ — $ impact from blast radius × usage.
+- **Cost-of-incident meter** ✅ — dollar impact from the real blast radius ×
+  team-owned rates in `config/cost_model.yaml`, written into the asset's catalog
+  "About" box; cites its assumptions and can be disabled.
 - **Trust badges / health scores** ✅ — a 0-100 score and A–D grade written onto
   each asset, refreshed whenever an incident closes.
 - **Ask-the-on-call** ⬜ — chat over incident memory.

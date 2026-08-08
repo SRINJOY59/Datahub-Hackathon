@@ -11,6 +11,7 @@ from agent.tools.detectors import (  # noqa: F401
     datahub_assertions,
     dependency,
     freshness,
+    git_commit,
     leakage,
     model_drift,
     training_metrics,
