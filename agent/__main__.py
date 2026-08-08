@@ -9,6 +9,7 @@
     python -m agent notify          write role-tailored comms for open incidents
     python -m agent drill <name>    fire drill: break it on purpose, then heal it
     python -m agent serve           start the webhook server (event-driven mode)
+    python -m agent incidents       list incidents from the local store, with stats
 
 Run a scenario first (`python -m scenarios <name>`) to give the loop something to
 find, or use `drill` to do both in one step.
@@ -35,6 +36,8 @@ def main() -> None:
 
     if args.command == "digest":
         return _digest()
+    if args.command == "incidents":
+        return _incidents()
 
     llm = LLMClient()
     if llm.available():
@@ -68,7 +71,8 @@ def main() -> None:
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="agent")
     ap.add_argument("command", nargs="?", default="run",
-                    choices=["run", "digest", "badges", "runbooks", "notify", "drill", "serve"],
+                    choices=["run", "digest", "badges", "runbooks", "notify", "drill",
+                             "serve", "incidents"],
                     help="what to do (default: run the loop)")
     ap.add_argument("scenario", nargs="?", help="scenario name, for `drill`")
     ap.add_argument("--fake", action="store_true", help="use canned mechanisms")
@@ -118,6 +122,36 @@ def _digest() -> None:
     from agent.reporting.digest import SavingsDigest
 
     print(SavingsDigest().build().render())
+
+
+def _incidents() -> None:
+    """What the agent has handled, read back from the incident store."""
+    from agent.store import shared_store
+
+    store = shared_store()
+    rows = store.list(limit=25)
+    if not rows:
+        print("\nNo incidents recorded yet — run the loop first.")
+        return
+
+    stats = store.stats()
+    mttr = stats["mttr_minutes"]
+    print(f"\n  {stats['total']} incident(s): {stats['resolved']} resolved, "
+          f"{stats['open']} open")
+    if mttr is not None:
+        print(f"  mean time to close: {mttr:.1f} min")
+    if stats["exposure_usd"]:
+        print(f"  total exposure    : ${stats['exposure_usd']:,.0f}")
+    if stats["by_change_type"]:
+        kinds = ", ".join(f"{k} x{n}" for k, n in stats["by_change_type"].items())
+        print(f"  by change type    : {kinds}")
+
+    print(f"\n  {'incident':12s} {'asset':22s} {'change':22s} {'status':12s} cost")
+    print(f"  {'-' * 76}")
+    for r in rows:
+        cost = f"${r['cost_usd']:,.0f}" if r["cost_usd"] else "-"
+        print(f"  {r['id']:12s} {(r['asset_name'] or '?')[:22]:22s} "
+              f"{(r['change_type'] or '?')[:22]:22s} {r['status']:12s} {cost}")
 
 
 def _badges() -> None:

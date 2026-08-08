@@ -60,6 +60,7 @@ class SentinelAgent:
         planner: Optional[RemediationPlanner] = None,
         shadow: bool = False,
         notifier=None,
+        store=None,
     ) -> None:
         self.m = mechanisms
         self.memory = memory
@@ -70,6 +71,11 @@ class SentinelAgent:
         self.notifier = notifier
         self.pager = None
         self._cost = CostEstimator()
+        if store is None:
+            from agent.store import shared_store
+
+            store = shared_store()
+        self.store = store
 
     # --- THE LOOP ---------------------------------------------------------- #
     def handle(self, inc: Incident,
@@ -84,23 +90,51 @@ class SentinelAgent:
         rca = self.rca.analyze(inc, ctx)
         self._log_rca(rca)
 
+        cost = self._cost.estimate(ctx, rca.change_type.value)
+        self._record_open(inc, ctx, rca)
+
         if self.notifier:
-            cost = self._cost.estimate(ctx, rca.change_type.value)
             self.notifier.on_detect(inc, ctx, rca, cost)
 
         root_key = (rca.root_cause_asset, rca.root_cause_column)
         if root_key in seen_roots:
             log("correlate", f"same root cause as {seen_roots[root_key]} — "
                              f"skipping duplicate mitigation")
-            return self._outcome(inc, rca, "correlated", resolved=False, actions=[])
+            outcome = self._outcome(inc, rca, "correlated", resolved=False,
+                                    actions=[])
+            return self._close(inc, outcome, None, cost)
         seen_roots[root_key] = inc.id
 
         tier = self.policy.tier(ctx, rca)
         log("policy", f"tier={tier.value} ({self.policy.explain(tier, ctx, rca)})")
 
         if rca.change_type in _CODE_CHANGES:
-            return self._remediate_code(inc, ctx, rca)
-        return self._remediate_data(inc, ctx, rca, tier)
+            outcome = self._remediate_code(inc, ctx, rca)
+        else:
+            outcome = self._remediate_data(inc, ctx, rca, tier)
+        return self._close(inc, outcome, tier, cost)
+
+    # --- incident store ---------------------------------------------------- #
+    def _record_open(self, inc, ctx, rca) -> None:
+        """Record the incident the moment a diagnosis exists, so one that
+        crashes or is still running is visible rather than invisible."""
+        if not self.store:
+            return
+        try:
+            self.store.open_incident(inc, ctx, rca)
+        except Exception as exc:  # the store is observability, not the safety path
+            log("store", f"could not record incident: {exc}")
+
+    def _close(self, inc, outcome: IncidentOutcome, tier, cost) -> IncidentOutcome:
+        """The single point where an ending is recorded. Every terminal path
+        returns through here, so the store cannot drift from what handle()
+        actually returned."""
+        if self.store:
+            try:
+                self.store.close_incident(inc, outcome, tier=tier, cost=cost)
+            except Exception as exc:
+                log("store", f"could not record outcome: {exc}")
+        return outcome
 
     # --- remediation paths -------------------------------------------- #
     def _remediate_code(self, inc, ctx, rca) -> IncidentOutcome:
