@@ -28,6 +28,10 @@ PyGithub>=2.3.0
 # --- Slack integration (incident notifications + approval workflow) ---
 slack-sdk>=3.27,<4
 
+# --- Webhook server (event-driven agent runs: python -m agent serve) ---
+fastapi>=0.110,<1
+uvicorn[standard]>=0.29,<1
+
 # --- Config / utils ---
 python-dotenv>=1.0.0
 pyyaml>=6.0

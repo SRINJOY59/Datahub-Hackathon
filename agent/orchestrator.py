@@ -149,6 +149,12 @@ class SentinelAgent:
             return self._outcome(inc, rca, "shadow", resolved=False,
                                  actions=[a.action_type.value for a in actions])
 
+        actions = self._gate_approval(inc, ctx, rca, tier, actions)
+        if not actions:
+            log("approval", "denied — no actions will be applied")
+            self._escalate(inc, ctx, rca, tier, reason="approval denied via Slack")
+            return self._outcome(inc, rca, "escalated", resolved=False, actions=[])
+
         journal = self._apply(actions)
         applied = [a for a in journal if a.status == "applied"]
         failed = [a for a in journal if a.status == "failed"]
@@ -224,6 +230,41 @@ class SentinelAgent:
                 log("act", f"{a.action_type.value} -> {_short(a.target)}  "
                            f"FAILED: {applied.note}")
         return journal
+
+    def _gate_approval(self, inc, ctx, rca, tier, actions) -> list[ActionRecord]:
+        """Block on human approval only for HUMAN_ONLY tier (critical /
+        irreversible). PR_ONLY and AUTO tiers proceed immediately — those
+        actions are journaled with inverses and rolled back on validation
+        failure, so blocking a human adds delay without safety.
+
+        On approval: return all actions unchanged.
+        On deny: return empty list (escalate path).
+        On timeout with protective_only fallback: return only protective actions.
+        """
+        if tier is not AutonomyTier.HUMAN_ONLY:
+            return actions
+        if not self.notifier or not hasattr(self.notifier, "request_approval"):
+            return actions
+
+        mutating = [a for a in actions if not self.policy.is_protective(a.action_type)]
+        if not mutating:
+            return actions
+
+        decision = self.notifier.request_approval(inc, mutating, ctx, rca)
+
+        if decision.approved:
+            log("approval", f"approved by {decision.decided_by}")
+            return actions
+
+        if decision.timed_out:
+            protective = [a for a in actions if self.policy.is_protective(a.action_type)]
+            if protective:
+                log("approval", f"timed out — proceeding with {len(protective)} "
+                                f"protective action(s) only")
+                return protective
+            return []
+
+        return []
 
     def _succeed(self, inc, ctx, rca, tier, applied) -> None:
         released, failed = self.m.release_containment(inc.id)

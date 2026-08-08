@@ -20,6 +20,7 @@ from agent.contracts import (
     RootCauseAnalysis,
 )
 from agent.integrations.slack import formatter
+from agent.integrations.slack.approvals import ApprovalDecision, ApprovalHandler
 from agent.integrations.slack.client import SlackClient
 from agent.integrations.slack.config import SlackConfig
 
@@ -27,9 +28,11 @@ _THREADS_PATH = Path(".sentinel/slack_threads.json")
 
 
 class SlackNotifier:
-    def __init__(self, client: SlackClient, config: SlackConfig) -> None:
+    def __init__(self, client: SlackClient, config: SlackConfig,
+                 approval_handler: Optional[ApprovalHandler] = None) -> None:
         self.client = client
         self.config = config
+        self.approvals = approval_handler or ApprovalHandler()
         self._threads: dict[str, dict[str, str]] = self._load_threads()
 
     # --- Lifecycle hooks (called by the orchestrator) --------------------- #
@@ -129,17 +132,45 @@ class SlackNotifier:
         self._reply(incident.id, "engineer", blocks, text)
         print(f"  [slack    ] escalated {incident.id}: {reason}")
 
-    def on_approval_needed(
+    def request_approval(
         self,
         incident: Incident,
         actions: list[ActionRecord],
         context: ContextBundle,
         rca: RootCauseAnalysis,
-    ) -> None:
-        """Post approve/deny buttons in the engineer channel."""
+    ) -> ApprovalDecision:
+        """Post approve/deny buttons and block until a human responds.
+
+        Returns the decision. If Socket Mode is not configured or the timeout
+        expires, returns based on the fallback policy in config/slack.yaml.
+        """
         blocks, text = formatter.approval_request(incident, actions, context, rca)
         self._reply(incident.id, "engineer", blocks, text)
-        print(f"  [slack    ] approval requested for {incident.id}")
+
+        if not self.approvals.available:
+            print(f"  [slack    ] approval posted for {incident.id} (no Socket Mode "
+                  f"— applying fallback: {self.config.approval.fallback})")
+            approved = self.config.approval.fallback != "deny"
+            return ApprovalDecision(
+                approved=approved, decided_by="fallback",
+                timed_out=False,
+            )
+
+        timeout = self.config.approval.timeout_minutes * 60
+        print(f"  [slack    ] waiting for approval on {incident.id} "
+              f"(timeout: {self.config.approval.timeout_minutes}m)...")
+
+        decision = self.approvals.wait_for_decision(incident.id, timeout)
+
+        if decision.timed_out:
+            print(f"  [slack    ] approval timed out for {incident.id} "
+                  f"— applying fallback: {self.config.approval.fallback}")
+            decision.approved = self.config.approval.fallback != "deny"
+        else:
+            verb = "approved" if decision.approved else "denied"
+            print(f"  [slack    ] {incident.id} {verb} by {decision.decided_by}")
+
+        return decision
 
     # --- Announce mode (used by `python -m agent notify`) ----------------- #
 

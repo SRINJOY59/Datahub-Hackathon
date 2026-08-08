@@ -8,6 +8,7 @@
     python -m agent runbooks        synthesise runbooks from resolved incidents
     python -m agent notify          write role-tailored comms for open incidents
     python -m agent drill <name>    fire drill: break it on purpose, then heal it
+    python -m agent serve           start the webhook server (event-driven mode)
 
 Run a scenario first (`python -m scenarios <name>`) to give the loop something to
 find, or use `drill` to do both in one step.
@@ -45,6 +46,8 @@ def main() -> None:
         return _badges()
     if args.command == "runbooks":
         return _runbooks(llm)
+    if args.command == "serve":
+        return _serve(llm)
 
     agent, mechanisms = _build_agent(args, llm)
 
@@ -65,7 +68,7 @@ def main() -> None:
 def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="agent")
     ap.add_argument("command", nargs="?", default="run",
-                    choices=["run", "digest", "badges", "runbooks", "notify", "drill"],
+                    choices=["run", "digest", "badges", "runbooks", "notify", "drill", "serve"],
                     help="what to do (default: run the loop)")
     ap.add_argument("scenario", nargs="?", help="scenario name, for `drill`")
     ap.add_argument("--fake", action="store_true", help="use canned mechanisms")
@@ -173,6 +176,61 @@ def _notify(agent: SentinelAgent) -> None:
         print(messages.render())
         if notifier:
             notifier.announce(inc, ctx, rca, cost)
+
+
+def _serve(llm) -> None:
+    """Start the webhook server — event-driven agent runs."""
+    import uvicorn
+
+    from agent.integrations.webhooks.config import WebhookConfig
+    from agent.integrations.webhooks.router import AgentRunRequest
+    from agent.integrations.webhooks.server import app, configure
+
+    cfg = WebhookConfig.load()
+    if not cfg.enabled:
+        print("\nWebhook server is disabled (set enabled: true in "
+              "config/webhooks.yaml)")
+        return
+
+    notifier = _get_notifier()
+
+    from agent.tools.mechanisms.composite import RealMechanisms
+    from memory.base import get_memory
+
+    memory = get_memory()
+    mechanisms = RealMechanisms(llm=llm, memory=memory)
+
+    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, notifier=notifier)
+
+    def run_agent(request: AgentRunRequest) -> None:
+        print(f"\n  [webhook  ] incoming {request.source} event "
+              f"-> {request.asset_urn}")
+        incidents = agent.m.detect_incidents()
+        matched = [i for i in incidents if i.asset_urn == request.asset_urn]
+        if not matched and request.asset_urn == "__git_push__":
+            matched = incidents
+        if matched:
+            for inc in matched:
+                agent.handle(inc)
+        else:
+            print(f"  [webhook  ] no open incident for {request.asset_urn} — "
+                  f"running full sweep")
+            agent.run()
+
+    configure(cfg, run_agent)
+
+    enabled_sources = [s for s, sc in cfg.sources.items() if sc.enabled]
+    print(f"\nWebhook server starting on http://{cfg.server.host}:{cfg.server.port}")
+    print(f"  Sources: {', '.join(enabled_sources)}")
+    print(f"  Workers: {cfg.server.workers}")
+    print(f"\nEndpoints:")
+    for source in enabled_sources:
+        print(f"  POST /webhook/{source}")
+    print(f"  GET  /health")
+    print(f"  GET  /runs\n")
+
+    uvicorn.run(app, host=cfg.server.host, port=cfg.server.port,
+                log_level="info")
 
 
 def _drill(agent: SentinelAgent, mechanisms, scenario: str | None) -> None:
