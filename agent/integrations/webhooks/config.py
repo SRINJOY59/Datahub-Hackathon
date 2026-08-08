@@ -29,6 +29,7 @@ class WebhookConfig:
     enabled: bool = False
     server: ServerConfig = field(default_factory=ServerConfig)
     sources: dict[str, SourceConfig] = field(default_factory=dict)
+    sweep_interval_minutes: int = 0
 
     @classmethod
     def load(cls) -> WebhookConfig:
@@ -56,10 +57,14 @@ class WebhookConfig:
                 dag_to_asset=src.get("dag_to_asset") or {},
             )
 
+        schedule = raw.get("schedule", {})
+        sweep = schedule.get("sweep_interval_minutes", 0) if isinstance(schedule, dict) else 0
+
         return cls(
             enabled=raw.get("enabled", False),
             server=server,
             sources=sources,
+            sweep_interval_minutes=sweep,
         )
 
     def secret_for(self, source: str) -> str | None:

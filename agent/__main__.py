@@ -219,10 +219,31 @@ def _serve(llm) -> None:
 
     configure(cfg, run_agent)
 
+    sweep_minutes = cfg.sweep_interval_minutes
+    if sweep_minutes > 0:
+        import threading
+
+        def _sweep_loop():
+            import time
+            while True:
+                time.sleep(sweep_minutes * 60)
+                print(f"\n  [sweep    ] periodic sweep ({sweep_minutes}m interval)")
+                try:
+                    agent.run()
+                except Exception as exc:
+                    print(f"  [sweep    ] error: {exc}")
+
+        t = threading.Thread(target=_sweep_loop, daemon=True)
+        t.start()
+
     enabled_sources = [s for s, sc in cfg.sources.items() if sc.enabled]
     print(f"\nWebhook server starting on http://{cfg.server.host}:{cfg.server.port}")
     print(f"  Sources: {', '.join(enabled_sources)}")
     print(f"  Workers: {cfg.server.workers}")
+    if sweep_minutes > 0:
+        print(f"  Sweep: every {sweep_minutes}m")
+    else:
+        print(f"  Sweep: disabled")
     print(f"\nEndpoints:")
     for source in enabled_sources:
         print(f"  POST /webhook/{source}")

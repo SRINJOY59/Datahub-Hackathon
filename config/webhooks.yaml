@@ -32,3 +32,8 @@ sources:
   generic:
     enabled: true
     # Caller provides asset_urn directly in the POST body.
+
+schedule:
+  # Periodic full sweep — catches problems no webhook fires for (e.g. a job
+  # that silently stops running). Set to 0 to disable.
+  sweep_interval_minutes: 30
