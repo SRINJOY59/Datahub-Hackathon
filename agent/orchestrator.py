@@ -68,6 +68,7 @@ class SentinelAgent:
         self.planner = planner or RemediationPlanner(self.policy)
         self.shadow = shadow
         self.notifier = notifier
+        self.pager = None
         self._cost = CostEstimator()
 
     # --- THE LOOP ---------------------------------------------------------- #
@@ -232,16 +233,21 @@ class SentinelAgent:
         return journal
 
     def _gate_approval(self, inc, ctx, rca, tier, actions) -> list[ActionRecord]:
-        """Block on human approval only for HUMAN_ONLY tier (critical /
-        irreversible). PR_ONLY and AUTO tiers proceed immediately — those
-        actions are journaled with inverses and rolled back on validation
-        failure, so blocking a human adds delay without safety.
+        """Ask a human before mutating data on a sensitive asset.
+
+        Only *mutating* actions are ever gated — protective ones (tag, pause)
+        run at every tier, because withholding a warning while waiting for a
+        human is itself the risky choice. And gating only bites at PR_ONLY:
+        AUTO is by definition the routine case, and HUMAN_ONLY has already had
+        its mutating actions stripped by the planner, so there is nothing left
+        to approve there. That is the "critical needs approval, routine
+        reversible work does not" rule, expressed where it actually applies.
 
         On approval: return all actions unchanged.
         On deny: return empty list (escalate path).
         On timeout with protective_only fallback: return only protective actions.
         """
-        if tier is not AutonomyTier.HUMAN_ONLY:
+        if not self.policy.needs_human(tier):
             return actions
         if not self.notifier or not hasattr(self.notifier, "request_approval"):
             return actions
@@ -286,6 +292,8 @@ class SentinelAgent:
             cost = self._cost.estimate(ctx, rca.change_type.value)
             outcome = self._outcome(inc, rca, "resolved", True, applied_types, pr)
             self.notifier.on_resolve(inc, ctx, rca, cost, outcome)
+        if self.pager:
+            self.pager.resolve(inc.id)
 
     def _propose_fix(self, inc, ctx, rca) -> Optional[str]:
         """Ask for a code fix, and only report one if it actually produced an
@@ -342,6 +350,10 @@ class SentinelAgent:
             self._propose_fix(inc, ctx, rca)
         if self.notifier:
             self.notifier.on_escalate(inc, ctx, rca, tier, reason)
+        if self.pager:
+            self.pager.trigger(inc, ctx, rca, tier, reason)
+        else:
+            log("escalate", "no pager configured (set PAGERDUTY_ROUTING_KEY)")
 
     def _resolve(self, inc, ctx, rca, actions_taken: list[str],
                  resolution: str, resolved: bool = True) -> None:

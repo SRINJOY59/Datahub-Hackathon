@@ -121,6 +121,12 @@ class ApprovalHandler:
     def _resolve(self, incident_id: str, approved: bool, user: str) -> None:
         pending = self._pending.get(incident_id)
         if not pending:
+            # Slack load-balances interactions across every open Socket Mode
+            # connection for the app, so a click can land on a process that is
+            # not the one waiting. Say so instead of dropping it in silence.
+            print(f"  [slack    ] got a decision for {incident_id} but this "
+                  f"process has no approval pending for it — is another "
+                  f"`python -m agent` / `serve` running?")
             return
         pending.decision = ApprovalDecision(
             approved=approved,

@@ -90,8 +90,10 @@ def _build_agent(args, llm) -> tuple[SentinelAgent, object]:
         mechanisms = RealMechanisms(llm=llm, memory=memory)
 
     notifier = _get_notifier()
+    pager = _get_pager()
     agent = SentinelAgent(mechanisms, llm=llm, memory=memory, shadow=args.shadow,
                           notifier=notifier)
+    agent.pager = pager
     return agent, mechanisms
 
 
@@ -99,6 +101,14 @@ def _get_notifier():
     try:
         from agent.integrations.slack import shared_slack
         return shared_slack()
+    except Exception:
+        return None
+
+
+def _get_pager():
+    try:
+        from agent.integrations.pagerduty import shared_pagerduty
+        return shared_pagerduty()
     except Exception:
         return None
 
@@ -193,6 +203,7 @@ def _serve(llm) -> None:
         return
 
     notifier = _get_notifier()
+    pager = _get_pager()
 
     from agent.tools.mechanisms.composite import RealMechanisms
     from memory.base import get_memory
@@ -201,6 +212,7 @@ def _serve(llm) -> None:
     mechanisms = RealMechanisms(llm=llm, memory=memory)
 
     agent = SentinelAgent(mechanisms, llm=llm, memory=memory, notifier=notifier)
+    agent.pager = pager
 
     def run_agent(request: AgentRunRequest) -> None:
         print(f"\n  [webhook  ] incoming {request.source} event "
