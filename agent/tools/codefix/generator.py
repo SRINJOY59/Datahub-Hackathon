@@ -56,84 +56,137 @@ class CodeFixTool:
     # ------------------------------------------------------------------ #
     def propose_fix(self, incident: Incident, context: ContextBundle,
                     root_cause: str) -> str:
-        request = self._request_for(incident, root_cause)
-        if request is None:
+        requests = self._requests_for(incident, root_cause)
+        if not requests:
             return NOTHING_TO_FIX
-        return self.apply_request(incident, request)
+        return self.apply_requests(incident, requests)
 
     def apply_request(self, incident: Incident, request: FixRequest) -> str:
         """Rewrite one file per the request, diff it, and open a PR if possible."""
-        path = REPO_ROOT / request.file
-        if not path.exists():
+        return self.apply_requests(incident, [request])
+
+    def apply_requests(self, incident: Incident, requests: list[FixRequest]) -> str:
+        """Rewrite all affected files, combine their diffs, and open a PR with all changes."""
+        if not requests:
             return NOTHING_TO_FIX
-        original = path.read_text(encoding="utf-8", errors="ignore")
 
-        fixed = self._rewrite(request, original)
-        if fixed is None or fixed.strip() == original.strip():
-            return NO_FIX_GENERATED
+        fixed_files: dict[str, tuple[str, str, FixRequest]] = {}  # file -> (original, fixed, request)
+        diff_chunks: list[str] = []
+        failures: list[str] = []
 
-        # Check the proposal in a place it cannot hurt anything before putting it
-        # in front of a human. A confidently-worded fix that does not parse is
-        # worse than no fix, because someone has to read it to find that out.
-        if request.file.endswith(".py"):
-            from agent.tools.warehouse.shadow import ShadowEnvironment
+        for req in requests:
+            path = REPO_ROOT / req.file
+            if not path.exists():
+                failures.append(f"{req.file}: file not found")
+                continue
+            original = path.read_text(encoding="utf-8", errors="ignore")
 
-            verdict = ShadowEnvironment.verify_python(request.file, fixed)
-            if not verdict.passed:
-                return f"{NO_FIX_GENERATED}: {'; '.join(verdict.failures)}"
-            request.detail = (request.detail + f"\n\nShadow check: {verdict.note}"
-                              ).strip()
+            fixed = self._rewrite(req, original)
+            if fixed is None or fixed.strip() == original.strip():
+                failures.append(f"{req.file}: no valid fix generated")
+                continue
 
-        diff = "".join(difflib.unified_diff(
-            original.splitlines(keepends=True),
-            fixed.splitlines(keepends=True),
-            fromfile=f"a/{request.file}", tofile=f"b/{request.file}",
-        ))
+            if req.file.endswith(".py"):
+                from agent.tools.warehouse.shadow import ShadowEnvironment
 
+                verdict = ShadowEnvironment.verify_python(req.file, fixed)
+                if not verdict.passed:
+                    failures.append(f"{req.file}: shadow check failed ({'; '.join(verdict.failures)})")
+                    continue
+                req.detail = (req.detail + f"\n\nShadow check ({req.file}): {verdict.note}").strip()
+
+            diff_chunk = "".join(difflib.unified_diff(
+                original.splitlines(keepends=True),
+                fixed.splitlines(keepends=True),
+                fromfile=f"a/{req.file}", tofile=f"b/{req.file}",
+            ))
+            if diff_chunk:
+                diff_chunks.append(diff_chunk)
+                fixed_files[req.file] = (original, fixed, req)
+
+        if not fixed_files:
+            fail_msg = f": {'; '.join(failures)}" if failures else ""
+            return f"{NO_FIX_GENERATED}{fail_msg}"
+
+        combined_diff = "\n".join(diff_chunks)
         FIXES_DIR.mkdir(parents=True, exist_ok=True)
         diff_path = FIXES_DIR / f"{incident.id}.diff"
-        diff_path.write_text(diff, encoding="utf-8")
+        diff_path.write_text(combined_diff, encoding="utf-8")
 
-        pr = (self._open_pr(incident, request, fixed)
+        main_title = requests[0].title if requests else "code fix"
+        all_details = "\n\n".join(filter(None, [r.detail or r.instruction for r in requests]))
+
+        pr = (self._open_multi_pr(incident, main_title, all_details, fixed_files)
               if self.token and self.repo else None)
         return pr or diff_path.relative_to(REPO_ROOT).as_posix()
 
     # ------------------------------------------------------------------ #
-    def _request_for(self, incident: Incident,
-                     root_cause: str) -> Optional[FixRequest]:
-        """Derive a fix request from the incident, when one applies.
-
-        Dependency advisories carry the affected file and the migration text.
-        Other incident classes attach a `fix_request` to their evidence when they
-        know what code needs changing; most attach nothing, because most
-        incidents are repaired by moving data rather than by editing code.
-        """
+    def _requests_for(self, incident: Incident,
+                      root_cause: str) -> list[FixRequest]:
+        """Derive one or more fix requests from the incident evidence."""
         evidence = incident.raw_evidence or {}
 
+        # 1. Check for explicit list of fix requests
+        explicit_list = evidence.get("fix_requests")
+        if isinstance(explicit_list, list) and explicit_list:
+            reqs = []
+            for item in explicit_list:
+                if isinstance(item, dict) and item.get("file"):
+                    reqs.append(FixRequest(
+                        file=item["file"],
+                        instruction=item.get("instruction", root_cause),
+                        title=item.get("title", "code fix"),
+                        detail=item.get("detail", ""),
+                    ))
+            if reqs:
+                return reqs
+
+        # 2. Check for single explicit fix request
         explicit = evidence.get("fix_request")
         if isinstance(explicit, dict) and explicit.get("file"):
-            return FixRequest(
+            return [FixRequest(
                 file=explicit["file"],
                 instruction=explicit.get("instruction", root_cause),
                 title=explicit.get("title", "code fix"),
                 detail=explicit.get("detail", ""),
-            )
+            )]
 
+        # 3. Derive from advisory and all unique files in usages
         adv = evidence.get("advisory") or {}
         usages = evidence.get("usages") or []
         if adv and usages:
-            return FixRequest(
-                file=usages[0]["file"],
-                instruction=(
-                    f"Dependency change: {adv.get('package')} "
-                    f"{adv.get('from_version')} -> {adv.get('to_version')}\n"
-                    f"Breaking change: {adv.get('summary')}\n"
-                    f"Migration required: {adv.get('migration')}"
-                ),
-                title=f"{adv.get('package')} {adv.get('to_version')} migration",
-                detail=adv.get("migration", ""),
+            # Collect unique files preserving order
+            unique_files: list[str] = []
+            for u in usages:
+                f = u.get("file") if isinstance(u, dict) else getattr(u, "file", None)
+                if f and f not in unique_files:
+                    unique_files.append(f)
+
+            instruction = (
+                f"Dependency change: {adv.get('package')} "
+                f"{adv.get('from_version')} -> {adv.get('to_version')}\n"
+                f"Breaking change: {adv.get('summary')}\n"
+                f"Migration required: {adv.get('migration')}"
             )
-        return None
+            title = f"{adv.get('package')} {adv.get('to_version')} migration"
+            detail = adv.get("migration", "")
+
+            return [
+                FixRequest(
+                    file=f,
+                    instruction=instruction,
+                    title=title,
+                    detail=detail,
+                )
+                for f in unique_files
+            ]
+
+        return []
+
+    def _request_for(self, incident: Incident,
+                     root_cause: str) -> Optional[FixRequest]:
+        reqs = self._requests_for(incident, root_cause)
+        return reqs[0] if reqs else None
 
     def _rewrite(self, request: FixRequest, content: str) -> Optional[str]:
         if not (self.llm and self.llm.available()):
@@ -150,8 +203,8 @@ class CodeFixTool:
             return None
         return _strip_fences(out)
 
-    def _open_pr(self, incident: Incident, request: FixRequest,
-                 content: str) -> Optional[str]:
+    def _open_multi_pr(self, incident: Incident, title: str, detail: str,
+                       fixed_files: dict[str, tuple[str, str, FixRequest]]) -> Optional[str]:
         try:
             from github import Github
 
@@ -161,25 +214,30 @@ class CodeFixTool:
             branch = f"sentinel/{incident.id.lower()}"
             sha = repo.get_branch(base).commit.sha
             repo.create_git_ref(ref=f"refs/heads/{branch}", sha=sha)
-            gh_file = repo.get_contents(request.file, ref=branch)
-            repo.update_file(
-                request.file, f"fix: {request.title}",
-                content, gh_file.sha, branch=branch,
-            )
+
+            for file_path, (_, content, req) in fixed_files.items():
+                gh_file = repo.get_contents(file_path, ref=branch)
+                repo.update_file(
+                    file_path, f"fix: {req.title} ({file_path})",
+                    content, gh_file.sha, branch=branch,
+                )
+
             pr = repo.create_pull(
-                title=f"[Sentinel] {request.title}",
-                body=(f"Automated fix for {incident.id}.\n\n"
-                      f"{request.detail or request.instruction}"),
+                title=f"[Sentinel] {title}",
+                body=(f"Automated migration for {incident.id} touching {len(fixed_files)} file(s).\n\n"
+                      f"{detail}"),
                 head=branch, base=base, draft=True,
             )
             return pr.html_url
         except Exception as e:
-            # A token was configured, so silently writing a diff would let a
-            # failed PR look like the intended outcome. Surface why it failed and
-            # fall back to the diff, rather than pretending a PR was never wanted.
             print(f"  [fix      ] PR creation failed for {self.repo}: "
-                  f"{type(e).__name__}: {e} — falling back to a local diff")
+                  f"{type(e).__name__}: {e} — falling back to local diff")
             return None
+
+    def _open_pr(self, incident: Incident, request: FixRequest,
+                 content: str) -> Optional[str]:
+        return self._open_multi_pr(incident, request.title, request.detail or request.instruction,
+                                   {request.file: ("", content, request)})
 
 
 def _strip_fences(text: str) -> str:

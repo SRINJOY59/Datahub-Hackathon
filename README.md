@@ -192,10 +192,16 @@ python -m agent
 python -m scenarios reset
 ```
 
-Expect: the agent detects the advisory, scans the **codebase** for affected
-usages, traces them to the impacted DataHub model, and writes a real migration
-diff to `examples/generated_fixes/<incident>.diff`. Set `GITHUB_TOKEN` and
-`GITHUB_REPO` in `.env` to open an actual draft PR instead.
+Expect: the agent detects the advisory, scans the **codebase** using the AST index
+for affected call-sites, traces them across the DataHub lineage graph to the
+impacted ML model and downstream scoring services, and writes a real multi-file
+migration diff to `examples/generated_fixes/<incident>.diff` (or opens a draft PR
+when `GITHUB_TOKEN` and `GITHUB_REPO` are configured in `.env`).
+
+Every fix is verified in an isolated shadow environment (`verify_python`) before
+being proposed. External API providers can also publish advisories directly to the
+webhook endpoint (`POST /api/v1/advisory`), and SREs can inspect the full blast
+radius and trigger automated migrations from the dashboard at `/api-health`.
 
 ### Silent failures — the ones dbt cannot see
 
@@ -409,9 +415,18 @@ Visit **http://localhost:3000** to explore:
 - **Pipeline (`/pipeline`)**: Stage-by-stage execution traces, real-time log streaming with level filters (INFO/WARN/ERROR/DEBUG), records/hr throughput, p95 latency, and error rate sparklines.
 - **Trends (`/trends`)**: 7/30/90-day time-series of incident frequencies, exposure amounts, and MTTR curves.
 - **Asset Health (`/assets`)**: Trust scores (0–100) and reliability grades (A–D) computed from assertion failures, drift, freshness lag, and past incidents.
+- **API Health & Self-Maintaining APIs (`/api-health`)**: Automated API breaking-change intelligence, codebase dependency inventory with status badges, DataHub lineage-traced blast radius visualizer, interactive multi-file diff inspector for auto-generated PRs, on-demand SRE dependency scan trigger, and live vendor webhook simulation.
 - **Runbooks (`/runbooks`)**: Autonomous `AgentSkill` runbooks synthesized from resolved incident post-mortems and registered in DataHub.
 - **Activity (`/activity`)**: Append-only action journal, manual fire drill trigger, and one-click rollback.
 - **Ask On-Call (`/chat`)**: Incident-grounded assistant with full Markdown rendering, code snippets, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
+
+### REST & Webhook Endpoints
+
+In addition to GraphQL at `/graphql`, the backend serves dedicated operational and webhook endpoints:
+- `POST /api/v1/advisory`: Webhook for API vendors and package registries to publish breaking-change advisories.
+- `POST /api/v1/dependencies/scan`: SRE trigger for an immediate codebase dependency and advisory sweep.
+- `GET /api/v1/dependencies/blast-radius?package=...`: Fast query computing the DataHub lineage blast radius of a package change.
+- `GET /api/v1/dependencies/stats`: Aggregate health metrics for platform engineering dashboards.
 
 ### Populating Demo / Seed Data
 

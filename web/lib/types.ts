@@ -134,3 +134,85 @@ export interface SystemStatus {
   webhookSourcesEnabled: string[];
   sweepIntervalMinutes: number;
 }
+
+// --- Self-Maintaining APIs & Dependency Health Types ----------------------- //
+
+export interface Dependency {
+  package: string;
+  installedVersion: string | null;
+  filesUsing: number;
+  impactedAssets: number;
+  assetUrns: string[];
+  hasAdvisory: boolean;
+  status: "healthy" | "at_risk" | "unknown" | string;
+}
+
+export interface AdvisoryUsage {
+  file: string;
+  line: number;
+  code: string;
+}
+
+export interface Advisory {
+  id: string;
+  package: string;
+  importName: string;
+  fromVersion: string;
+  toVersion: string;
+  kind: string;
+  summary: string;
+  migration: string;
+  symbols: string[];
+  usages: AdvisoryUsage[];
+  usagesCount: number;
+  impactedAssets: string[];
+  impactedCount: number;
+  publishedAt: string;
+}
+
+export interface Migration {
+  incidentId: string;
+  assetUrn: string;
+  assetName: string | null;
+  status: string;
+  resolved: boolean;
+  pr: string | null;
+  costUsd: number | null;
+  narrative: string;
+  detectedAt: string;
+  closedAt: string | null;
+  hasDiff: boolean;
+  diffPreview: string;
+}
+
+export interface BlastRadiusNode {
+  urn: string;
+  name: string;
+  entityType: string;
+  upstreamOf: string;
+}
+
+export interface BlastRadius {
+  package: string;
+  files: string[];
+  directAssets: string[];
+  downstreamAssets: BlastRadiusNode[];
+  totalImpacted: number;
+}
+
+export interface ApiHealthStats {
+  totalDependencies: number;
+  atRisk: number;
+  healthy: number;
+  activeAdvisories: number;
+  resolvedMigrations: number;
+  pendingMigrations: number;
+  totalAffectedUsages: number;
+}
+
+export interface DependencyScanResult {
+  scanned: boolean;
+  advisoriesChecked: number;
+  incidentsFound: number;
+  error: string | null;
+}

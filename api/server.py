@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from strawberry.fastapi import GraphQLRouter
 
 from api.actions_routes import router as actions_router
+from api.advisory_routes import router as advisory_router
 from api.chat_routes import router as chat_router
 from api.schema import schema
 
@@ -25,7 +26,7 @@ GRAPHQL_PATH = "/graphql"
 
 
 def attach(app: FastAPI) -> None:
-    """Mount GraphQL (with the GraphiQL explorer), chat, and actuation routes."""
+    """Mount GraphQL (with the GraphiQL explorer), chat, actuation, and advisory routes."""
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -35,6 +36,7 @@ def attach(app: FastAPI) -> None:
     app.include_router(GraphQLRouter(schema), prefix=GRAPHQL_PATH)
     app.include_router(chat_router)
     app.include_router(actions_router)
+    app.include_router(advisory_router)
 
 
 def create_app() -> FastAPI:
