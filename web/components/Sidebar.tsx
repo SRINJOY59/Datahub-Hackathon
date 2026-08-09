@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useAuth } from "@/lib/auth-context";
 import StatusPill from "./StatusPill";
 
 const NAV: { href: string; label: string; icon: React.ReactNode; group: string }[] = [
@@ -17,7 +18,14 @@ const NAV: { href: string; label: string; icon: React.ReactNode; group: string }
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { user, username, email, signOut } = useAuth();
   const groups = Array.from(new Set(NAV.map((n) => n.group)));
+
+  const handleSignOut = async () => {
+    await signOut();
+    router.push("/login");
+  };
 
   return (
     <aside className="sticky top-0 flex h-screen w-[228px] shrink-0 flex-col border-r border-border bg-surface/40">
@@ -70,12 +78,65 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="border-t border-border p-3">
+      {/* User profile & System status footer */}
+      <div className="border-t border-border p-3 space-y-2.5">
+        {user ? (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-surface-raised/60 p-2 text-xs">
+            <div className="flex min-w-0 items-center gap-2">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-accent/20 text-accent font-semibold uppercase">
+                {username ? username.charAt(0) : "O"}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-medium text-foreground leading-tight">
+                  {username}
+                </p>
+                <p className="truncate text-[10px] text-muted-dim leading-tight mt-0.5">
+                  {email || "operator"}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleSignOut}
+              title="Sign out of Sentinel"
+              className="rounded p-1 text-muted-dim hover:bg-surface-hover hover:text-bad focus:outline-none transition"
+            >
+              <IconLogOut />
+            </button>
+          </div>
+        ) : (
+          <Link
+            href="/login"
+            className="flex items-center justify-center gap-2 rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground transition"
+          >
+            <IconUser />
+            <span>Sign In</span>
+          </Link>
+        )}
         <StatusPill />
       </div>
     </aside>
   );
 }
+
+function IconLogOut() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <polyline points="16 17 21 12 16 7" />
+      <line x1="21" x2="9" y1="12" y2="12" />
+    </svg>
+  );
+}
+
+function IconUser() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  );
+}
+
 
 /* Inline 14px stroke icons — no icon dependency for seven glyphs. */
 function base(children: React.ReactNode) {

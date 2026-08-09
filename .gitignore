@@ -35,3 +35,5 @@ Thumbs.db
 # Agent runtime state: advisories, action journal, baselines, breaker files
 .sentinel/
 .claude/
+
+supabase/

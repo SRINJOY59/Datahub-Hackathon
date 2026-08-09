@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import Sidebar from "@/components/Sidebar";
-import CommandPalette from "@/components/CommandPalette";
+import { AuthProvider } from "@/lib/auth-context";
+import AppShell from "@/components/AppShell";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -19,18 +19,20 @@ export const metadata: Metadata = {
   description: "Autonomous data & ML incident response — live dashboard.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full bg-background text-foreground">
-        <div className="flex">
-          <Sidebar />
-          <main className="min-w-0 flex-1">{children}</main>
-        </div>
-        <CommandPalette />
+        <AuthProvider>
+          <AppShell>{children}</AppShell>
+        </AuthProvider>
       </body>
     </html>
   );
