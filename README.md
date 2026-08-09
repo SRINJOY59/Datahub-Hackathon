@@ -424,6 +424,7 @@ Visit **http://localhost:3000** to explore:
 
 In addition to GraphQL at `/graphql`, the backend serves dedicated operational and webhook endpoints:
 - `POST /api/v1/advisory`: Webhook for API vendors and package registries to publish breaking-change advisories.
+- `POST /api/v1/advisories/sync-registry`: Triggers autonomous PyPI / GitHub registry monitor to check for new upstream releases.
 - `POST /api/v1/dependencies/scan`: SRE trigger for an immediate codebase dependency and advisory sweep.
 - `GET /api/v1/dependencies/blast-radius?package=...`: Fast query computing the DataHub lineage blast radius of a package change.
 - `GET /api/v1/dependencies/stats`: Aggregate health metrics for platform engineering dashboards.

@@ -54,3 +54,19 @@ def test_ingest_and_scan_advisory(tmp_path, monkeypatch):
     advisories = api_health.list_advisories()
     assert len(advisories) == 1
     assert advisories[0]["package"] == "test-sdk"
+
+
+def test_registry_monitor_sync(tmp_path, monkeypatch):
+    from agent.tools.detectors.registry_monitor import RegistryMonitor
+    import agent.tools.detectors.registry_monitor as rm_mod
+
+    temp_advisories = tmp_path / "advisories"
+    monkeypatch.setattr(rm_mod, "ADVISORIES_DIR", temp_advisories)
+    monkeypatch.setattr(api_health, "ADVISORIES_DIR", temp_advisories)
+
+    monitor = RegistryMonitor(timeout_seconds=1.0)
+    res = monitor.scan_and_sync(packages=["scikit-learn"])
+    assert res["success"] is True
+    assert res["packages_checked"] == 1
+    assert res["advisories_generated"] >= 1
+    assert len(list(temp_advisories.glob("*.json"))) >= 1

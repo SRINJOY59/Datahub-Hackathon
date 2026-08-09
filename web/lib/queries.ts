@@ -9,6 +9,7 @@ import type {
   Incident,
   JournalEntry,
   Migration,
+  RegistrySyncResult,
   Runbook,
   SavingsDigest,
   Stats,
@@ -216,6 +217,16 @@ export async function triggerDependencyScan(): Promise<DependencyScanResult> {
     } }`,
   );
   return data.triggerDependencyScan;
+}
+
+export async function syncRegistries(): Promise<RegistrySyncResult> {
+  const data = await gql<{ syncRegistries: RegistrySyncResult }>(
+    `query { syncRegistries {
+      success packagesChecked advisoriesGenerated networkOnline error
+      generated { package path source }
+    } }`,
+  );
+  return data.syncRegistries;
 }
 
 export async function ingestVendorAdvisory(payload: {

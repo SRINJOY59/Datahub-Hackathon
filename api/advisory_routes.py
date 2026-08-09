@@ -45,6 +45,12 @@ def get_advisories():
     return {"advisories": api_health.list_advisories()}
 
 
+@router.post("/advisories/sync-registry")
+def sync_registry():
+    """Automatically monitor PyPI / GitHub releases for package updates and breaking changes."""
+    return api_health.sync_registries()
+
+
 @router.post("/dependencies/scan")
 def trigger_scan():
     """Trigger an immediate SRE scan of codebase dependencies against active advisories."""

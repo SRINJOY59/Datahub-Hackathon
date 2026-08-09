@@ -12,6 +12,7 @@ import {
   fetchMigrations,
   fetchBlastRadius,
   triggerDependencyScan,
+  syncRegistries,
   ingestVendorAdvisory,
 } from "@/lib/queries";
 import type {
@@ -36,6 +37,7 @@ export default function ApiHealthPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [scanning, setScanning] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
 
   // Search & Filters
@@ -119,6 +121,28 @@ export default function ApiHealthPage() {
     }
   };
 
+  const handleSyncRegistries = async () => {
+    setSyncing(true);
+    setScanMessage(null);
+    try {
+      const res = await syncRegistries();
+      if (res.success) {
+        const netStatus = res.networkOnline ? "Live PyPI Registry Online" : "Offline Registry Cache";
+        setScanMessage(
+          `Registry sync complete (${netStatus}): ${res.packagesChecked} packages checked, ${res.advisoriesGenerated} breaking changes auto-detected.`
+        );
+      } else {
+        setScanMessage(`Registry sync standby: ${res.error || "Standby"}. Manual Webhook ingestion is active.`);
+      }
+      loadData();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Sync failed";
+      setScanMessage(`Registry monitor: ${msg}. Manual Webhook trigger is active.`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   const handlePublishAdvisory = async (e: React.FormEvent) => {
     e.preventDefault();
     setIngestSubmitting(true);
@@ -168,6 +192,30 @@ export default function ApiHealthPage() {
         live={!error}
         actions={
           <div className="flex items-center gap-2.5">
+            <button
+              onClick={handleSyncRegistries}
+              disabled={syncing}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-accent/40 bg-accent-soft px-3 py-1.5 text-xs font-medium text-accent hover:border-accent hover:bg-accent-soft/80 disabled:opacity-50 transition"
+              title="Automatically query PyPI / GitHub for latest releases and breaking changes"
+            >
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={syncing ? "animate-spin" : ""}
+              >
+                <path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242" />
+                <path d="M12 12v9" />
+                <path d="m8 17 4 4 4-4" />
+              </svg>
+              <span>{syncing ? "Syncing PyPI..." : "Auto-Sync PyPI/GitHub"}</span>
+            </button>
+
             <button
               onClick={() => setShowIngestModal(true)}
               className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium text-foreground hover:border-border-strong hover:bg-surface-hover transition"
@@ -328,6 +376,9 @@ export default function ApiHealthPage() {
                         <h3 className="text-sm font-semibold">{adv.package}</h3>
                         <span className="font-mono text-xs text-muted">
                           {adv.fromVersion} → <span className="text-warn">{adv.toVersion}</span>
+                        </span>
+                        <span className="rounded bg-surface-raised border border-border px-2 py-0.5 font-mono text-[10px] text-muted-dim">
+                          auto-monitored
                         </span>
                       </div>
                       <p className="mt-1.5 text-xs text-foreground font-medium">{adv.summary}</p>

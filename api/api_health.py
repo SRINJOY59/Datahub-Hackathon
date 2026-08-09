@@ -276,6 +276,26 @@ def trigger_dependency_scan() -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# SRE: sync with PyPI / npm / GitHub registries
+# --------------------------------------------------------------------------- #
+def sync_registries(packages: Optional[list[str]] = None) -> dict:
+    """Automatically monitor PyPI/GitHub for package updates & breaking changes."""
+    try:
+        from agent.tools.detectors.registry_monitor import shared_registry_monitor
+        monitor = shared_registry_monitor()
+        return monitor.scan_and_sync(packages=packages)
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e),
+            "packages_checked": 0,
+            "advisories_generated": 0,
+            "network_online": False,
+            "generated": [],
+        }
+
+
+# --------------------------------------------------------------------------- #
 # Vendor webhook: ingest an advisory from an external source
 # --------------------------------------------------------------------------- #
 def ingest_advisory(payload: dict) -> dict:

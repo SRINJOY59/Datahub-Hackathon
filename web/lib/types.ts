@@ -216,3 +216,18 @@ export interface DependencyScanResult {
   incidentsFound: number;
   error: string | null;
 }
+
+export interface RegistrySyncItem {
+  package: string;
+  path: string;
+  source: string;
+}
+
+export interface RegistrySyncResult {
+  success: boolean;
+  packagesChecked: number;
+  advisoriesGenerated: number;
+  networkOnline: boolean;
+  error: string | null;
+  generated: RegistrySyncItem[];
+}

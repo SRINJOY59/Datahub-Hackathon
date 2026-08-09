@@ -240,6 +240,23 @@ class DependencyScanResult:
 
 
 @strawberry.type
+class RegistrySyncItem:
+    package: str
+    path: str
+    source: str
+
+
+@strawberry.type
+class RegistrySyncResult:
+    success: bool
+    packages_checked: int
+    advisories_generated: int
+    network_online: bool
+    error: Optional[str] = None
+    generated: list[RegistrySyncItem] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
 class SystemStatus:
     """What is actually alive, for the dashboard's health panel — not
     aspirational config, observed state (or, for integrations, whether a

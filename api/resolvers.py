@@ -33,6 +33,8 @@ from api.types import (
     Incident,
     JournalEntry,
     Migration,
+    RegistrySyncItem,
+    RegistrySyncResult,
     Runbook,
     SavingsDigest,
     Stats,
@@ -270,4 +272,17 @@ class Query:
             advisories_checked=res["advisories_checked"],
             incidents_found=res["incidents_found"],
             error=res.get("error"),
+        )
+
+    @strawberry.field
+    def sync_registries(self) -> RegistrySyncResult:
+        res = api_health.sync_registries()
+        generated = [RegistrySyncItem(**g) for g in res.get("generated", [])]
+        return RegistrySyncResult(
+            success=res["success"],
+            packages_checked=res["packages_checked"],
+            advisories_generated=res["advisories_generated"],
+            network_online=res["network_online"],
+            error=res.get("error"),
+            generated=generated,
         )
