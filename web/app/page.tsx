@@ -13,9 +13,11 @@ export default function LandingPage() {
   const [activeTab, setActiveTab] = useState<"schema" | "drift" | "leakage" | "api">("schema");
   const [activeStage, setActiveStage] = useState<number>(2);
 
-  // Live counter animation simulation
+  // Live counter animation simulation with hydration safety
+  const [mounted, setMounted] = useState(false);
   const [exposureAvoided, setExposureAvoided] = useState(148620);
   useEffect(() => {
+    setMounted(true);
     const timer = setInterval(() => {
       setExposureAvoided((prev) => prev + Math.floor(Math.random() * 15) + 5);
     }, 4000);
@@ -157,8 +159,8 @@ export default function LandingPage() {
         <div className="mt-14 mx-auto max-w-5xl grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 text-left">
           <div className="rounded-2xl border border-border/80 bg-surface/70 backdrop-blur-md p-4 sm:p-5 shadow-lg">
             <span className="text-[10px] font-mono uppercase tracking-wider text-muted-dim block">Exposure Avoided</span>
-            <p className="mt-1 text-2xl sm:text-3xl font-extrabold font-mono text-good">
-              ${exposureAvoided.toLocaleString()}
+            <p suppressHydrationWarning className="mt-1 text-2xl sm:text-3xl font-extrabold font-mono text-good">
+              ${mounted ? exposureAvoided.toLocaleString() : "148,620"}
             </p>
             <p className="mt-0.5 text-[11px] text-muted">Downtime financial risk averted</p>
           </div>
