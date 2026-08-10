@@ -200,12 +200,16 @@ def _index_python_regex(text: str) -> FileFacts:
 
 
 _SHARED: Optional[CodebaseMemory] = None
+_LAST_ROOT: Optional[Path] = None
 
 
-def shared_codebase() -> CodebaseMemory:
-    """One index per process. Probes and detectors share it so the repo is read
-    once per run rather than once per tool."""
-    global _SHARED
-    if _SHARED is None:
-        _SHARED = CodebaseMemory()
+def shared_codebase(force_refresh: bool = False) -> CodebaseMemory:
+    """One index per process, dynamically tracking the active repository."""
+    global _SHARED, _LAST_ROOT
+    from api.shared import get_active_repo_root
+    current_root = get_active_repo_root()
+
+    if _SHARED is None or force_refresh or _LAST_ROOT != current_root:
+        _SHARED = CodebaseMemory(repo_root=current_root)
+        _LAST_ROOT = current_root
     return _SHARED

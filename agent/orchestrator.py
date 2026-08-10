@@ -46,8 +46,13 @@ from agent.tools.graph.urns import short_name
 _CODE_CHANGES = (ChangeType.DEPENDENCY_CHANGE, ChangeType.CODE_CHANGE)
 
 
-def log(stage: str, msg: str) -> None:
+def log(stage: str, msg: str, agent: Optional[SentinelAgent] = None) -> None:
     print(f"  [{stage:9s}] {msg}")
+    if agent and hasattr(agent, "stream_callback") and agent.stream_callback:
+        try:
+            agent.stream_callback(stage, msg)
+        except Exception:
+            pass
 
 
 class SentinelAgent:
@@ -60,6 +65,7 @@ class SentinelAgent:
         planner: Optional[RemediationPlanner] = None,
         shadow: bool = False,
         notifier=None,
+        pager=None,
         store=None,
     ) -> None:
         self.m = mechanisms
@@ -68,8 +74,23 @@ class SentinelAgent:
         self.policy = policy or AutonomyPolicy()
         self.planner = planner or RemediationPlanner(self.policy)
         self.shadow = shadow
+
+        if notifier is None:
+            try:
+                from agent.integrations.slack import shared_slack
+                notifier = shared_slack()
+            except Exception:
+                notifier = None
         self.notifier = notifier
-        self.pager = None
+
+        if pager is None:
+            try:
+                from agent.integrations.pagerduty import shared_pagerduty
+                pager = shared_pagerduty()
+            except Exception:
+                pager = None
+        self.pager = pager
+
         self._cost = CostEstimator()
         if store is None:
             from agent.store import shared_store
@@ -85,7 +106,7 @@ class SentinelAgent:
 
         ctx = self.m.read_context(inc.asset_urn)
         log("context", f"{ctx.name}: {len(ctx.upstream)} upstream, "
-                       f"{len(ctx.downstream)} downstream, tags={ctx.tags}")
+                       f"{len(ctx.downstream)} downstream, tags={ctx.tags}", agent=self)
 
         rca = self.rca.analyze(inc, ctx)
         self._log_rca(rca)
@@ -106,7 +127,7 @@ class SentinelAgent:
         seen_roots[root_key] = inc.id
 
         tier = self.policy.tier(ctx, rca)
-        log("policy", f"tier={tier.value} ({self.policy.explain(tier, ctx, rca)})")
+        log("policy", f"tier={tier.value} ({self.policy.explain(tier, ctx, rca)})", agent=self)
 
         if rca.change_type in _CODE_CHANGES:
             outcome = self._remediate_code(inc, ctx, rca)
@@ -123,7 +144,7 @@ class SentinelAgent:
         try:
             self.store.open_incident(inc, ctx, rca)
         except Exception as exc:  # the store is observability, not the safety path
-            log("store", f"could not record incident: {exc}")
+            log("store", f"could not record incident: {exc}", agent=self)
 
     def _close(self, inc, outcome: IncidentOutcome, tier, cost) -> IncidentOutcome:
         """The single point where an ending is recorded. Every terminal path
@@ -133,7 +154,7 @@ class SentinelAgent:
             try:
                 self.store.close_incident(inc, outcome, tier=tier, cost=cost)
             except Exception as exc:
-                log("store", f"could not record outcome: {exc}")
+                log("store", f"could not record outcome: {exc}", agent=self)
         return outcome
 
     # --- remediation paths -------------------------------------------- #
@@ -145,7 +166,7 @@ class SentinelAgent:
         incident is *contained*, not claimed as resolved."""
         pr = self.m.propose_fix(inc, ctx, rca.narrative)
         if _is_artifact(pr):
-            log("fix", f"generated migration -> {pr}")
+            log("fix", f"generated migration -> {pr}", agent=self)
             self._resolve(inc, ctx, rca, actions_taken=["propose_fix"],
                           resolution=f"auto-migration: {pr}")
             return self._outcome(inc, rca, "code_fix", resolved=True,
@@ -172,10 +193,10 @@ class SentinelAgent:
         actions, withheld = self.planner.plan(rca, ctx, tier)
         for a in withheld:
             log("withheld", f"{a.action_type.value} on {_short(a.target)} — "
-                            f"blocked by tier {tier.value}")
+                            f"blocked by tier {tier.value}", agent=self)
 
         if not actions:
-            log("plan", "no autonomous action available for this incident")
+            log("plan", "no autonomous action available for this incident", agent=self)
             self._escalate(inc, ctx, rca, tier, reason="nothing the agent may do")
             return self._outcome(inc, rca, "escalated", resolved=False, actions=[])
 
@@ -186,7 +207,7 @@ class SentinelAgent:
 
         actions = self._gate_approval(inc, ctx, rca, tier, actions)
         if not actions:
-            log("approval", "denied — no actions will be applied")
+            log("approval", "denied — no actions will be applied", agent=self)
             self._escalate(inc, ctx, rca, tier, reason="approval denied via Slack")
             return self._outcome(inc, rca, "escalated", resolved=False, actions=[])
 
@@ -195,7 +216,7 @@ class SentinelAgent:
         failed = [a for a in journal if a.status == "failed"]
         if failed:
             log("act", f"{len(failed)} action(s) failed — the gate decides "
-                       f"whether what did apply was enough")
+                       f"whether what did apply was enough", agent=self)
 
         result = self.m.run_checks(inc.asset_urn)
         log("validate", f"passed={result.passed} "
@@ -248,9 +269,9 @@ class SentinelAgent:
             if journal is not None:
                 journal.record_simulated(a, inc.id)
             log("shadow", f"would {a.action_type.value} -> {_short(a.target)}"
-                          + (f"  ({a.note})" if a.note else ""))
+                          + (f"  ({a.note})" if a.note else ""), agent=self)
         log("shadow", f"{len(actions)} action(s) recorded, none applied — "
-                      f"incident left open")
+                      f"incident left open", agent=self)
 
     def _apply(self, actions: list[ActionRecord]) -> list[ActionRecord]:
         journal: list[ActionRecord] = []
@@ -260,10 +281,10 @@ class SentinelAgent:
             if applied.status == "applied":
                 log("act", f"{a.action_type.value} -> {_short(a.target)}  "
                            f"(inverse ready: {applied.inverse is not None})"
-                    + (f"  {applied.note}" if applied.note else ""))
+                    + (f"  {applied.note}" if applied.note else ""), agent=self)
             else:
                 log("act", f"{a.action_type.value} -> {_short(a.target)}  "
-                           f"FAILED: {applied.note}")
+                           f"FAILED: {applied.note}", agent=self)
         return journal
 
     def _gate_approval(self, inc, ctx, rca, tier, actions) -> list[ActionRecord]:
@@ -293,14 +314,14 @@ class SentinelAgent:
         decision = self.notifier.request_approval(inc, mutating, ctx, rca)
 
         if decision.approved:
-            log("approval", f"approved by {decision.decided_by}")
+            log("approval", f"approved by {decision.decided_by}", agent=self)
             return actions
 
         if decision.timed_out:
             protective = [a for a in actions if self.policy.is_protective(a.action_type)]
             if protective:
                 log("approval", f"timed out — proceeding with {len(protective)} "
-                                f"protective action(s) only")
+                                f"protective action(s) only", agent=self)
                 return protective
             return []
 
@@ -311,7 +332,7 @@ class SentinelAgent:
         if released:
             log("restore", f"lifted {released} protective measure(s) — breaker "
                            f"closed, downstream flags cleared"
-                + (f" ({failed} could not be lifted)" if failed else ""))
+                + (f" ({failed} could not be lifted)" if failed else ""), agent=self)
 
         pr = self._propose_fix(inc, ctx, rca) if self.policy.needs_human(tier) else None
         applied_types = [a.action_type.value for a in applied]
@@ -338,14 +359,14 @@ class SentinelAgent:
             log("fix", "no code change applies here — the mitigation is the "
                        "remediation; owners still need to make it permanent")
             return None
-        log("fix", f"permanent fix for review: {result}")
+        log("fix", f"permanent fix for review: {result}", agent=self)
         return result
 
     def _contain(self, inc, ctx, rca, tier, applied, failures) -> None:
         held = ", ".join(sorted({a.action_type.value for a in applied}))
         log("contain", f"no repair exists for {rca.change_type.value} — "
-                       f"holding {len(applied)} protective action(s): {held}")
-        log("contain", f"still failing (expected): {failures}")
+                       f"holding {len(applied)} protective action(s): {held}", agent=self)
+        log("contain", f"still failing (expected): {failures}", agent=self)
         self._escalate(inc, ctx, rca, tier,
                        reason="contained, but only a human can resolve this")
         applied_types = [a.action_type.value for a in applied]
@@ -366,10 +387,10 @@ class SentinelAgent:
         reverted, failed = self.m.rollback(inc.id, mutating_only=True)
         held = [a for a in applied if self.policy.is_protective(a.action_type)]
         log("rollback", f"validation failed — withdrew {reverted} data action(s)"
-                        + (f", {failed} could not be reverted" if failed else ""))
+                        + (f", {failed} could not be reverted" if failed else ""), agent=self)
         if held:
             log("rollback", f"keeping {len(held)} protective action(s) in place — "
-                            f"the pipeline is still bad, so the warning stands")
+                            f"the pipeline is still bad, so the warning stands", agent=self)
         self._escalate(inc, ctx, rca, tier,
                        reason=f"validation still failing: {failures}")
 
@@ -379,7 +400,7 @@ class SentinelAgent:
             self.notifier.on_rollback(inc, ctx, rca, outcome, failures)
 
     def _escalate(self, inc, ctx, rca, tier, reason: str) -> None:
-        log("escalate", f"paging {ctx.owners or ['(no owner on the asset)']} — {reason}")
+        log("escalate", f"paging {ctx.owners or ['(no owner on the asset)']} — {reason}", agent=self)
         if self.policy.needs_human(tier):
             self._propose_fix(inc, ctx, rca)
         if self.notifier:
@@ -387,13 +408,13 @@ class SentinelAgent:
         if self.pager:
             self.pager.trigger(inc, ctx, rca, tier, reason)
         else:
-            log("escalate", "no pager configured (set PAGERDUTY_ROUTING_KEY)")
+            log("escalate", "no pager configured (set PAGERDUTY_ROUTING_KEY)", agent=self)
 
     def _resolve(self, inc, ctx, rca, actions_taken: list[str],
                  resolution: str, resolved: bool = True) -> None:
         cost = CostEstimator().estimate(ctx, rca.change_type.value)
         verb = "avoided" if resolved else "at risk (unresolved)"
-        log("cost", f"est. exposure {verb}: ${cost.dollars:,.0f} — {cost.basis}")
+        log("cost", f"est. exposure {verb}: ${cost.dollars:,.0f} — {cost.basis}", agent=self)
 
         pm = PostMortem(
             incident_id=inc.id,
@@ -415,19 +436,18 @@ class SentinelAgent:
                            "to the graph, degraded tags left in place")
 
     # --- reporting ----------------------------------------------------- #
-    @staticmethod
-    def _log_rca(rca: RootCauseAnalysis) -> None:
-        log("rca", f"[{rca.change_type.value}] {rca.narrative}")
+    def _log_rca(self, rca: RootCauseAnalysis) -> None:
+        log("rca", f"[{rca.change_type.value}] {rca.narrative}", agent=self)
         log("rca", f"root cause: {_short(rca.root_cause_asset)}"
-                   f".{rca.root_cause_column}  (confidence {rca.confidence})")
+                   f".{rca.root_cause_column}  (confidence {rca.confidence})", agent=self)
         if rca.precedents:
             log("memory", f"cited {len(rca.precedents)} prior incident(s): "
-                          f"{rca.precedents}")
-        log("blast", f"{len(rca.blast_radius)} affected: {rca.blast_radius}")
+                          f"{rca.precedents}", agent=self)
+        log("blast", f"{len(rca.blast_radius)} affected: {rca.blast_radius}", agent=self)
 
     def run(self) -> list[IncidentOutcome]:
         incidents = self.m.detect_incidents()
-        log("detect", f"{len(incidents)} open incident(s)")
+        log("detect", f"{len(incidents)} open incident(s)", agent=self)
         seen_roots: dict = {}  # shared across incidents to correlate root causes
         outcomes = [self.handle(inc, seen_roots) for inc in incidents]
         if outcomes:

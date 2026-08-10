@@ -182,12 +182,20 @@ class IncidentStore:
             ).fetchone()
         return _row_to_dict(row) if row else None
 
-    def list(self, status: Optional[str] = None, limit: int = 50) -> list[dict]:
+    def list(self, status: Optional[str] = None, limit: int = 50,
+             repo_urns: Optional[list[str]] = None) -> list[dict]:
         sql = "SELECT * FROM incidents"
         params: list = []
+        clauses: list[str] = []
         if status:
-            sql += " WHERE status = ?"
+            clauses.append("status = ?")
             params.append(status)
+        if repo_urns:
+            placeholders = ", ".join("?" for _ in repo_urns)
+            clauses.append(f"asset_urn IN ({placeholders})")
+            params.extend(repo_urns)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
         sql += " ORDER BY detected_at DESC LIMIT ?"
         params.append(limit)
         with self._connect() as conn:
@@ -216,10 +224,16 @@ class IncidentStore:
             ).fetchall()
         return [_row_to_dict(r) for r in rows]
 
-    def stats(self) -> dict:
+    def stats(self, repo_urns: Optional[list[str]] = None) -> dict:
+        where = ""
+        params: list = []
+        if repo_urns:
+            placeholders = ", ".join("?" for _ in repo_urns)
+            where = f" WHERE asset_urn IN ({placeholders})"
+            params = list(repo_urns)
         with self._connect() as conn:
             totals = conn.execute(
-                """
+                f"""
                 SELECT
                     COUNT(*)                                   AS total,
                     SUM(resolved)                              AS resolved,
@@ -228,12 +242,14 @@ class IncidentStore:
                     AVG(CASE WHEN closed_at IS NOT NULL
                         THEN (julianday(closed_at) - julianday(detected_at))
                              * 24 * 60 END)                    AS mttr_minutes
-                FROM incidents
-                """
+                FROM incidents{where}
+                """,
+                params,
             ).fetchone()
             by_type = conn.execute(
-                "SELECT change_type, COUNT(*) AS n FROM incidents "
-                "GROUP BY change_type ORDER BY n DESC"
+                f"SELECT change_type, COUNT(*) AS n FROM incidents{where} "
+                "GROUP BY change_type ORDER BY n DESC",
+                params,
             ).fetchall()
         return {
             "total": totals["total"] or 0,
@@ -244,17 +260,18 @@ class IncidentStore:
             "by_change_type": {r["change_type"] or "unknown": r["n"] for r in by_type},
         }
 
-    def daily_series(self, days: int = 30) -> list[dict]:
-        """Per-day counts, cost and mean time-to-close.
-
-        Buckets on substr(detected_at, 1, 10) rather than SQLite's date():
-        the stored value is a full ISO timestamp with fractional seconds and a
-        +00:00 offset, and slicing the leading YYYY-MM-DD is exact regardless
-        of how the driver's date parser feels about that format.
-        """
+    def daily_series(self, days: int = 30,
+                     repo_urns: Optional[list[str]] = None) -> list[dict]:
+        """Per-day counts, cost and mean time-to-close."""
+        where = ""
+        params: list = []
+        if repo_urns:
+            placeholders = ", ".join("?" for _ in repo_urns)
+            where = f" WHERE asset_urn IN ({placeholders})"
+            params = list(repo_urns)
         with self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT
                     substr(detected_at, 1, 10)                 AS day,
                     COUNT(*)                                   AS total,
@@ -263,12 +280,12 @@ class IncidentStore:
                     AVG(CASE WHEN closed_at IS NOT NULL
                         THEN (julianday(closed_at) - julianday(detected_at))
                              * 24 * 60 END)                    AS mttr_minutes
-                FROM incidents
+                FROM incidents{where}
                 GROUP BY day
                 ORDER BY day DESC
                 LIMIT ?
                 """,
-                (days,),
+                (*params, days),
             ).fetchall()
         out = []
         for r in reversed(rows):  # oldest first, for plotting

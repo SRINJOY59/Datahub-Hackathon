@@ -33,11 +33,9 @@ class ModelDriftScenario(DataScenario):
     )
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
-        before = con.execute("select avg(amount) from raw_transactions").fetchone()[0]
-        # Applied to every row: a shift that is uniform in time is invisible to
-        # any check that compares recent data against older data.
+        before = con.execute("select avg(amount) from raw_transactions").fetchone()[0] or 0.0
         con.execute(f"update raw_transactions set amount = amount * {SHIFT}")
-        after = con.execute("select avg(amount) from raw_transactions").fetchone()[0]
+        after = con.execute("select avg(amount) from raw_transactions").fetchone()[0] or 0.0
         return (f"uniform repricing: mean amount {before:.2f} -> {after:.2f} "
                 f"({SHIFT}x across the whole history, so recent-vs-historical "
                 f"comparisons see nothing)")

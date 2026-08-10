@@ -55,6 +55,12 @@ class SlackNotifier:
 
         print(f"  [slack    ] announced {incident.id} to 3 channels")
 
+    def on_repo_onboard(self, result: Any) -> None:
+        """Announce newly connected repository across any repo to Slack channels."""
+        blocks, text = formatter.repo_onboarded(result)
+        self.client.post_message(self.config.channel_for("engineer"), blocks, text)
+        print(f"  [slack    ] announced connected repository {getattr(result, 'repo_name', 'repo')} to Slack")
+
     def on_resolve(
         self,
         incident: Incident,

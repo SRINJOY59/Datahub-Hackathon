@@ -21,10 +21,19 @@ class SchemaChangeScenario(DataScenario):
     )
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
-        # rename amount -> amount_cents: the downstream models still read `amount`,
-        # which now resolves to NULL for the whole table.
-        con.execute("alter table raw_transactions rename column amount to amount_cents")
-        # keep a NULL `amount` column so dbt still compiles but values are gone
-        con.execute("alter table raw_transactions add column amount double")
+        cols = [r[0] for r in con.execute(
+            "select column_name from information_schema.columns "
+            "where table_name = 'raw_transactions'"
+        ).fetchall()]
+
+        if "amount_cents" in cols and "amount" in cols:
+            con.execute("alter table raw_transactions drop column amount")
+            con.execute("alter table raw_transactions add column amount double")
+        elif "amount_cents" in cols:
+            con.execute("alter table raw_transactions add column amount double")
+        elif "amount" in cols:
+            con.execute("alter table raw_transactions rename column amount to amount_cents")
+            con.execute("alter table raw_transactions add column amount double")
+
         return ("upstream renamed `amount` -> `amount_cents`; the `amount` column "
                 "the pipeline reads is now empty (schema change)")

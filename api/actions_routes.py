@@ -8,6 +8,7 @@ doesn't require finding the process first.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import StreamingResponse
 
 from api import actions
 
@@ -43,6 +44,22 @@ def post_drill(scenario: str):
     if scenario not in actions.available_scenarios():
         raise HTTPException(400, f"Unknown scenario '{scenario}'")
     return actions.run_drill(scenario).as_dict()
+
+
+@router.get("/drill/{scenario}/stream")
+def stream_drill(scenario: str):
+    _require("allow_drill")
+    if scenario not in actions.available_scenarios():
+        raise HTTPException(400, f"Unknown scenario '{scenario}'")
+    return StreamingResponse(
+        actions.stream_drill_sync(scenario),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/rollback/{incident_id}")

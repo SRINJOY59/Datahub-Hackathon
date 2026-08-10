@@ -17,6 +17,10 @@ import type {
   SystemStatus,
   TrustBadge,
   WebhookActivity,
+  OnboardedRepoResult,
+  ChaosScenarioInfo,
+  ChaosDrillResult,
+  ConnectedRepository,
 } from "./types";
 
 const INCIDENT_FIELDS = `
@@ -238,5 +242,68 @@ export async function remediateAdvisory(advisoryId: string): Promise<RemediateAd
     { advisoryId },
   );
   return data.remediateAdvisory;
+}
+
+// --- Repository Auto-Onboarding & Chaos Simulator -------------------------- //
+export async function onboardRepository(url: string = "", branch?: string): Promise<OnboardedRepoResult> {
+  const data = await gql<{ onboardRepository: OnboardedRepoResult }>(
+    `mutation($url: String!, $branch: String) { onboardRepository(url: $url, branch: $branch) {
+      repoName repoPath totalFilesScanned datasetsCount modelsCount jobsCount lineageEdgesCount
+      mlflowExperimentId mlflowExperimentName datahubGraphEmitted githubWorkflowContent scannedAt
+      entities { name kind urn file }
+    } }`,
+    { url, branch },
+  );
+  return data.onboardRepository;
+}
+
+export async function fetchChaosScenarios(): Promise<ChaosScenarioInfo[]> {
+  const data = await gql<{ chaosScenarios: ChaosScenarioInfo[] }>(
+    `query { chaosScenarios {
+      id name category description signalType expectedRootCause
+    } }`,
+  );
+  return data.chaosScenarios;
+}
+
+export async function triggerChaosDrill(scenario: string): Promise<ChaosDrillResult> {
+  const data = await gql<{ triggerChaosDrill: ChaosDrillResult }>(
+    `mutation($scenario: String!) { triggerChaosDrill(scenario: $scenario) {
+      success scenarioId scenarioName incidentId signalType status log error
+    } }`,
+    { scenario },
+  );
+  return data.triggerChaosDrill;
+}
+
+export async function fetchConnectedRepositories(): Promise<ConnectedRepository[]> {
+  const data = await gql<{ connectedRepositories: ConnectedRepository[] }>(
+    `query { connectedRepositories {
+      id repoName repoPath commitSha datasetsCount modelsCount jobsCount edgesCount mlflowExperimentId onboardedAt isActive
+      entities { name kind urn file }
+    } }`,
+  );
+  return data.connectedRepositories;
+}
+
+export async function fetchActiveRepository(): Promise<ConnectedRepository> {
+  const data = await gql<{ activeRepository: ConnectedRepository }>(
+    `query { activeRepository {
+      id repoName repoPath commitSha datasetsCount modelsCount jobsCount edgesCount mlflowExperimentId onboardedAt isActive
+      entities { name kind urn file }
+    } }`,
+  );
+  return data.activeRepository;
+}
+
+export async function switchActiveRepository(repoId: string): Promise<ConnectedRepository> {
+  const data = await gql<{ switchActiveRepository: ConnectedRepository }>(
+    `mutation($repoId: String!) { switchActiveRepository(repoId: $repoId) {
+      id repoName repoPath commitSha datasetsCount modelsCount jobsCount edgesCount mlflowExperimentId onboardedAt isActive
+      entities { name kind urn file }
+    } }`,
+    { repoId },
+  );
+  return data.switchActiveRepository;
 }
 

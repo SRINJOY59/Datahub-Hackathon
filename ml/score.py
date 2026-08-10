@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import mlflow
 import mlflow.sklearn
 import pandas as pd
+from sklearn.impute import SimpleImputer
 
 import duckdb
 
@@ -63,6 +64,10 @@ def score() -> dict:
     model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}@{CHAMPION_ALIAS}")
 
     X = load_features()
+    if X.isna().any().any():
+        imputer = SimpleImputer(strategy="median")
+        X = pd.DataFrame(imputer.fit_transform(X), columns=FEATURES, index=X.index)
+
     proba = model.predict_proba(X)[:, 1]
     preds = (proba >= 0.5).astype(int)
 

@@ -127,7 +127,23 @@ def run_drill(scenario: str) -> Job:
         llm = LLMClient()
         memory = get_memory()
         mechanisms = RealMechanisms(llm=llm, memory=memory)
-        agent = SentinelAgent(mechanisms, llm=llm, memory=memory)
+
+        notifier = None
+        try:
+            from agent.integrations.slack import shared_slack
+            notifier = shared_slack()
+        except Exception:
+            pass
+
+        pager = None
+        try:
+            from agent.integrations.pagerduty import shared_pagerduty
+            pager = shared_pagerduty()
+        except Exception:
+            pass
+
+        agent = SentinelAgent(mechanisms, llm=llm, memory=memory, notifier=notifier)
+        agent.pager = pager
 
         job.log.append(f"injecting {scenario}")
         incident = mechanisms.inject_failure(scenario)
@@ -184,6 +200,251 @@ def run_rescore() -> Job:
         insights.trust_badges(force=True)  # refresh the cached read view
 
     return runner.submit("rescore", "all dbt datasets", work)
+
+
+def run_drill_sync(scenario: str) -> dict:
+    """Run a chaos drill synchronously, returning full results to the caller."""
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    from agent.llm import LLMClient
+    from agent.orchestrator import SentinelAgent
+    from agent.tools.mechanisms.composite import RealMechanisms
+    from memory.base import get_memory
+
+    log: list[str] = []
+    llm = LLMClient()
+    memory = get_memory()
+    mechanisms = RealMechanisms(llm=llm, memory=memory)
+
+    notifier = None
+    try:
+        from agent.integrations.slack import shared_slack
+        notifier = shared_slack()
+    except Exception:
+        pass
+
+    pager = None
+    try:
+        from agent.integrations.pagerduty import shared_pagerduty
+        pager = shared_pagerduty()
+    except Exception:
+        pass
+
+    agent = SentinelAgent(mechanisms, llm=llm, memory=memory, notifier=notifier)
+    agent.pager = pager
+
+    log.append("Resetting pipeline to clean state...")
+    try:
+        from scenarios.base import run_dbt
+        import os
+        from api.shared import get_active_repo_root
+        
+        # Determine path dynamically
+        dbt_dir = get_active_repo_root() / "pipeline" / "dbt"
+        
+        # Pass CWD explicitly if possible, or assume run_dbt handles it
+        if dbt_dir.exists():
+            run_dbt(["seed", "--full-refresh"])
+            run_dbt(["run"])
+            log.append("Pipeline reset complete")
+        else:
+            log.append("Pipeline reset skipped: dbt directory not found")
+    except Exception as exc:
+        log.append(f"Pipeline reset skipped: {exc}")
+
+    log.append(f"Injecting scenario: {scenario}")
+    incident = mechanisms.inject_failure(scenario)
+    if incident is None:
+        return {
+            "success": False,
+            "status": "detection_failed",
+            "log": log + [f"Sentinel did not detect the incident '{scenario}' was supposed to cause"],
+            "error": f"Drill '{scenario}' injected but no incident was detected",
+        }
+
+    log.append(f"Detected incident {incident.id}: {incident.signal_type.value}")
+    log.append(f"Asset: {incident.asset_urn}")
+    ctx = mechanisms.read_context(incident.asset_urn)
+    outcome = agent.handle(incident)
+    log.append(f"RCA: {outcome.root_cause_asset or 'N/A'}")
+    
+    # Safely get the tier from the outcome or policy if available
+    tier_name = "N/A"
+    try:
+        tier_obj = agent.policy.tier(ctx, agent.rca.analyze(incident, ctx))
+        tier_name = tier_obj.value if tier_obj else "N/A"
+    except Exception:
+        # Fallback if tier fails
+        pass
+        
+    log.append(f"Tier: {tier_name}")
+    log.append(f"Actions applied: {len(outcome.actions_taken)}")
+    log.append(f"Outcome: {outcome.status} (resolved={outcome.resolved})")
+
+    _register_drill_urn(incident.asset_urn)
+
+    return {
+        "success": outcome.resolved,
+        "status": "resolved" if outcome.resolved else "mitigated",
+        "incident_id": incident.id,
+        "signal_type": incident.signal_type.value,
+        "log": log,
+    }
+
+
+def stream_drill_sync(scenario: str):
+    """Run a chaos drill synchronously and stream the progress back as SSE."""
+    import json
+    import queue
+    import threading
+    from dotenv import load_dotenv
+
+    load_dotenv()
+    from agent.llm import LLMClient
+    from agent.orchestrator import SentinelAgent
+    from agent.tools.mechanisms.composite import RealMechanisms
+    from memory.base import get_memory
+
+    q = queue.Queue()
+
+    def stream_callback(stage: str, msg: str):
+        q.put({"type": "log", "stage": stage, "message": msg})
+
+    def run():
+        try:
+            llm = LLMClient()
+            memory = get_memory()
+            mechanisms = RealMechanisms(llm=llm, memory=memory)
+
+            notifier = None
+            try:
+                from agent.integrations.slack import shared_slack
+                notifier = shared_slack()
+            except Exception:
+                pass
+
+            pager = None
+            try:
+                from agent.integrations.pagerduty import shared_pagerduty
+                pager = shared_pagerduty()
+            except Exception:
+                pass
+
+            agent = SentinelAgent(mechanisms, llm=llm, memory=memory, notifier=notifier)
+            agent.pager = pager
+            agent.stream_callback = stream_callback
+
+            stream_callback("system", "Resetting pipeline to clean state...")
+            try:
+                from scenarios.base import run_dbt
+                import os
+                from api.shared import get_active_repo_root
+                
+                dbt_dir = get_active_repo_root() / "pipeline" / "dbt"
+                if dbt_dir.exists():
+                    run_dbt(["seed", "--full-refresh"])
+                    run_dbt(["run"])
+                    stream_callback("system", "Pipeline reset complete")
+                else:
+                    stream_callback("system", "Pipeline reset skipped: dbt directory not found")
+            except Exception as exc:
+                stream_callback("system", f"Pipeline reset skipped: {exc}")
+
+            stream_callback("system", f"Injecting scenario: {scenario}")
+            incident = mechanisms.inject_failure(scenario)
+            if incident is None:
+                q.put({"type": "error", "error": f"Drill '{scenario}' injected but no incident was detected"})
+                q.put(None)
+                return
+
+            q.put({
+                "type": "incident",
+                "incident_id": incident.id,
+                "signal_type": incident.signal_type.value,
+                "asset_urn": incident.asset_urn,
+                "summary": incident.summary,
+            })
+            stream_callback("detect", f"Detected incident {incident.id}: {incident.signal_type.value}")
+            stream_callback("context", f"Asset: {incident.asset_urn}")
+            
+            ctx = mechanisms.read_context(incident.asset_urn)
+            outcome = agent.handle(incident)
+            
+            stream_callback("system", f"RCA: {outcome.root_cause_asset or 'N/A'}")
+            
+            tier_name = "N/A"
+            try:
+                tier_obj = agent.policy.tier(ctx, agent.rca.analyze(incident, ctx))
+                tier_name = tier_obj.value if tier_obj else "N/A"
+            except Exception:
+                pass
+                
+            stream_callback("system", f"Tier: {tier_name}")
+            stream_callback("system", f"Actions applied: {len(outcome.actions_taken)}")
+            stream_callback("system", f"Outcome: {outcome.status} (resolved={outcome.resolved})")
+
+            _register_drill_urn(incident.asset_urn)
+            q.put({
+                "type": "done",
+                "success": outcome.resolved,
+                "status": "resolved" if outcome.resolved else "mitigated",
+                "incident_id": incident.id,
+                "signal_type": incident.signal_type.value,
+                "asset_urn": incident.asset_urn,
+                "root_cause_asset": outcome.root_cause_asset,
+                "root_cause_column": outcome.root_cause_column,
+                "actions_taken": outcome.actions_taken,
+                "pr": outcome.pr,
+                "change_type": outcome.change_type.value if getattr(outcome, "change_type", None) else None,
+            })
+            
+        except Exception as e:
+            q.put({"type": "error", "error": str(e)})
+        finally:
+            q.put(None)
+
+    threading.Thread(target=run, daemon=True).start()
+
+    while True:
+        msg = q.get()
+        if msg is None:
+            break
+        yield f"data: {json.dumps(msg)}\n\n"
+
+
+def _register_drill_urn(asset_urn: str) -> None:
+    """Add a drill's asset_urn to the active repo's entity list so it shows up in scoped views."""
+    try:
+        import json
+        from api.repo_onboarding import ConnectedRepoStore
+        store = ConnectedRepoStore()
+        active = store.get_active()
+        if not active:
+            return
+        lineage = json.loads(active.get("lineage_json") or "{}")
+        existing_urns = {d["urn"] for d in lineage.get("datasets", [])}
+        existing_urns.update(m["urn"] for m in lineage.get("models", []))
+        existing_urns.update(j["urn"] for j in lineage.get("jobs", []))
+        if asset_urn in existing_urns:
+            return
+        lineage.setdefault("datasets", []).append({
+            "name": asset_urn.split(",")[-2] if "," in asset_urn else asset_urn,
+            "kind": "drill_target",
+            "file": "chaos_drill",
+            "urn": asset_urn,
+            "platform": "dbt",
+        })
+        import sqlite3
+        from api.repo_onboarding import _DB_PATH
+        with sqlite3.connect(_DB_PATH) as conn:
+            conn.execute(
+                "UPDATE connected_repositories SET lineage_json = ? WHERE id = ?",
+                (json.dumps(lineage), active["id"]),
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 
 def available_scenarios() -> list[str]:

@@ -159,12 +159,14 @@ def _incidents() -> None:
 
 def _badges() -> None:
     """Recompute every asset's health grade, whether or not anything broke."""
+    import os
     from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
 
     from agent.tools.graph.trust import TrustScorer
 
-    graph = DataHubGraph(DataHubGraphConfig(server="http://localhost:8080"))
-    scorer = TrustScorer()
+    gms_url = os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
+    graph = DataHubGraph(DataHubGraphConfig(server=gms_url))
+    scorer = TrustScorer(gms_server=gms_url)
     urns = list(graph.get_urns_by_filter(entity_types=["dataset"], platform="dbt"))
 
     print(f"\nScoring {len(urns)} asset(s):\n")
@@ -336,6 +338,13 @@ def _serve(llm) -> None:
     try:
         uvicorn.run(app, host=cfg.server.host, port=cfg.server.port,
                     log_level="info")
+    except OSError as err:
+        if "10048" in str(err) or "Address already in use" in str(err) or getattr(err, "errno", None) in (10048, 98):
+            print(f"\n[ERROR] Could not bind to port {cfg.server.port}: address/port is already in use.")
+            print(f"[TIP] Another instance of 'agent serve' or another service is already running on port {cfg.server.port}.")
+            print(f"[TIP] To run on a different port, set PORT env variable (e.g. PORT=8091 python -m agent serve).\n")
+        else:
+            raise
     finally:
         sweep_scheduler.stop()
 

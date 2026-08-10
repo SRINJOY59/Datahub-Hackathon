@@ -25,11 +25,11 @@ class UnitBugScenario(DataScenario):
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         clause = self.recent_clause(con)
-        before = con.execute("select avg(amount) from raw_transactions").fetchone()[0]
+        before = con.execute("select avg(amount) from raw_transactions").fetchone()[0] or 0.0
         con.execute(f"update raw_transactions set amount = amount * 100 where {clause}")
         n = con.execute(
             f"select count(*) from raw_transactions where {clause}"
-        ).fetchone()[0]
-        after = con.execute("select avg(amount) from raw_transactions").fetchone()[0]
+        ).fetchone()[0] or 0
+        after = con.execute("select avg(amount) from raw_transactions").fetchone()[0] or 0.0
         return (f"upstream now reports amounts in cents (100x unit bug); "
                 f"corrupted {n} recent txns; raw avg {before:.2f} -> {after:.2f}")

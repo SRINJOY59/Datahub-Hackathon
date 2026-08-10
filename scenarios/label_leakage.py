@@ -46,14 +46,14 @@ class LabelLeakageScenario(DataScenario):
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         before = con.execute(
             "select corr(amount, is_fraud) from raw_transactions"
-        ).fetchone()[0]
+        ).fetchone()[0] or 0.0
         con.execute(
             f"update raw_transactions "
             f"set amount = amount + is_fraud * {FRAUD_SURCHARGE}"
         )
         after = con.execute(
             "select corr(amount, is_fraud) from raw_transactions"
-        ).fetchone()[0]
+        ).fetchone()[0] or 0.0
         return (f"fraud surcharge folded into `amount`: correlation with the label "
                 f"{before:+.3f} -> {after:+.3f}; the feature now encodes the "
                 f"outcome it is meant to predict")

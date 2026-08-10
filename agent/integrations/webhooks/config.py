@@ -42,10 +42,13 @@ class WebhookConfig:
             return cls()
 
         srv = raw.get("server", {})
+        env_host = os.environ.get("HOST") or os.environ.get("SENTINEL_HOST")
+        env_port = os.environ.get("PORT") or os.environ.get("SENTINEL_PORT")
+
         server = ServerConfig(
-            host=srv.get("host", "0.0.0.0"),
-            port=srv.get("port", 8090),
-            workers=srv.get("workers", 2),
+            host=env_host if env_host else srv.get("host", "0.0.0.0"),
+            port=int(env_port) if env_port else srv.get("port", 8090),
+            workers=int(os.environ.get("WORKERS", srv.get("workers", 2))),
         )
 
         sources: dict[str, SourceConfig] = {}

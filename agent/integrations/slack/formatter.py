@@ -31,6 +31,33 @@ _STATUS_EMOJI = {
 }
 
 
+def _get_repo_name(context: Optional[ContextBundle] = None, asset_urn: str = "") -> str:
+    try:
+        import json
+        from api.shared import get_active_repo_id
+        from api.repo_onboarding import ConnectedRepoStore
+
+        target_urn = ""
+        if context:
+            target_urn = getattr(context, "asset_urn", getattr(context, "urn", ""))
+        if not target_urn:
+            target_urn = asset_urn
+        if not target_urn:
+            return get_active_repo_id()
+
+        store = ConnectedRepoStore()
+        for repo in store.list():
+            lineage = json.loads(repo.get("lineage_json") or "{}")
+            urns = {d.get("urn") for d in lineage.get("datasets", [])}
+            urns.update(m.get("urn") for m in lineage.get("models", []))
+            urns.update(j.get("urn") for j in lineage.get("jobs", []))
+            if target_urn in urns:
+                return repo.get("repo_name", "")
+        return get_active_repo_id()
+    except Exception:
+        return "default"
+
+
 def detect_engineer(
     incident: Incident,
     context: ContextBundle,
@@ -40,17 +67,19 @@ def detect_engineer(
     """Block Kit blocks + fallback text for the engineer channel."""
     emoji = _SEVERITY_EMOJI.get(rca.confidence, ":large_orange_circle:")
     asset = context.name
+    repo_name = _get_repo_name(context)
     root = short_name(rca.root_cause_asset)
     if rca.root_cause_column:
         root += f".{rca.root_cause_column}"
     owners = ", ".join(context.owners) or "unassigned"
 
     blocks = [
-        _header(f"{emoji} [{rca.change_type.value}] {asset}"),
-        _section(f"*Root cause:* `{root}`\n{rca.narrative}"),
+        _header(f"{emoji} [{rca.change_type.value}] {asset} ({repo_name})"),
+        _section(f"*Repository:* `{repo_name}`\n*Root cause:* `{root}`\n{rca.narrative}"),
     ]
 
     fields = [
+        f"*Repository:* `{repo_name}`",
         f"*Confidence:* {rca.confidence}",
         f"*Exposure:* ${cost.dollars:,.0f}" if cost.dollars else "*Exposure:* n/a",
     ]
@@ -63,9 +92,9 @@ def detect_engineer(
         blocks.append(_section("*Lineage:* " + " :arrow_left: ".join(rca.upstream_path)))
 
     blocks.append(_section(f"*First action:* {rca.recommended_mitigation}"))
-    blocks.append(_context(f"Owners: {owners} | Incident: {incident.id}"))
+    blocks.append(_context(f"Repo: {repo_name} | Owners: {owners} | Incident: {incident.id}"))
 
-    fallback = f"[{rca.change_type.value}] {asset} — root cause: {root}"
+    fallback = f"[{rca.change_type.value}] {asset} ({repo_name}) — root cause: {root}"
     return blocks, fallback
 
 
@@ -75,13 +104,15 @@ def detect_analyst(
 ) -> tuple[list[dict], str]:
     plain = _PLAIN.get(rca.change_type.value, _PLAIN["unknown"])
     asset = context.name
+    repo_name = _get_repo_name(context)
     downstream = [n.name for n in context.downstream]
     blast = ", ".join(downstream) if downstream else "no downstream consumers"
     owners = ", ".join(context.owners) or "unassigned"
 
     blocks = [
-        _header(f":warning: Data quality alert — {asset}"),
+        _header(f":warning: Data quality alert — {asset} ({repo_name})"),
         _section(
+            f"*Repository:* `{repo_name}`\n"
             f"*What happened:* {plain}, in *{asset}*.\n"
             f"*Affected downstream:* {blast}."
         ),
@@ -89,8 +120,9 @@ def detect_analyst(
             f":no_entry: Please do not rely on these until an engineer "
             f"clears it ({owners})."
         ),
+        _context(f"Repository: {repo_name}"),
     ]
-    fallback = f"Data alert: {plain} in {asset}. Downstream: {blast}."
+    fallback = f"Data alert [{repo_name}]: {plain} in {asset}. Downstream: {blast}."
     return blocks, fallback
 
 
@@ -100,15 +132,16 @@ def detect_executive(
     cost: CostEstimate,
 ) -> tuple[list[dict], str]:
     asset = context.name
+    repo_name = _get_repo_name(context)
     plain = _PLAIN.get(rca.change_type.value, _PLAIN["unknown"])
     dollars = f"${cost.dollars:,.0f}" if cost.dollars else "not estimated"
     owners = ", ".join(context.owners) or "unassigned"
 
     text = (
-        f"*{asset}:* {plain}. Estimated business exposure at risk: "
+        f"*[{repo_name}] {asset}:* {plain}. Estimated business exposure at risk: "
         f"*{dollars}*. Status: detected. Owner: {owners}."
     )
-    blocks = [_section(text)]
+    blocks = [_section(text), _context(f"Repository: {repo_name}")]
     return blocks, text
 
 
@@ -198,6 +231,35 @@ def resolve_executive(
     else:
         text = f":warning: *{asset}* contained, awaiting human. Exposure at risk: *{dollars}*."
     return [_section(text)], text
+
+
+def repo_onboarded(result: Any) -> tuple[list[dict], str]:
+    """Block Kit blocks for repository onboarding notification across any connected repo."""
+    name = getattr(result, "repo_name", "Repository")
+    datasets = getattr(result, "datasets_count", 0)
+    models = getattr(result, "models_count", 0)
+    jobs = getattr(result, "jobs_count", 0)
+    edges = getattr(result, "lineage_edges_count", 0)
+    sha = getattr(result, "commit_sha", None) or "HEAD"
+    exp = getattr(result, "mlflow_experiment_name", "N/A")
+
+    blocks = [
+        _header(f":package: New Repository Connected — {name}"),
+        _section(
+            f"Sentinel successfully scanned, parsed AST lineage, and emitted graph nodes to DataHub for *{name}*."
+        ),
+        _fields([
+            f"*Datasets Discovered:* {datasets}",
+            f"*ML Models:* {models}",
+            f"*Data Jobs:* {jobs}",
+            f"*Lineage Edges:* {edges}",
+            f"*Commit:* `{sha[:8]}`" if sha else "*Commit:* HEAD",
+            f"*MLflow Experiment:* `{exp}`",
+        ]),
+        _context(f"Repository: {name} | Autonomous Sentinel DataHub Lineage Guard Active"),
+    ]
+    fallback = f"Repository Connected: {name} ({datasets} datasets, {models} models, {edges} lineage edges)"
+    return blocks, fallback
 
 
 # --- Block Kit helpers ---------------------------------------------------- #

@@ -95,9 +95,12 @@ def run_dbt(args: list[str]) -> bool:
 def reingest() -> None:
     """Refresh DataHub so assertion results (and the incident) are visible."""
     sys.path.insert(0, str(REPO_ROOT))
-    from ingestion.runner import IngestionRunner
-
-    IngestionRunner().run()
+    try:
+        from ingestion.runner import IngestionRunner
+        IngestionRunner().run()
+    except Exception as exc:
+        msg = str(exc).encode("ascii", "replace").decode("ascii")
+        print(f"[reingest] DataHub refresh skipped (GMS offline): {msg}")
 
 
 def rescore(update_baseline: bool = False) -> str:
@@ -118,7 +121,7 @@ def rescore(update_baseline: bool = False) -> str:
         BASELINE_PATH.write_text(json.dumps(snap, indent=2), encoding="utf-8")
 
     return (f"scored {snap['n_scored']} rows: positive rate "
-            f"{snap['positive_pred_rate']:.4f}"
+            f"{(snap.get('positive_pred_rate') or 0.0):.4f}"
             + ("; scoring baseline moved with it" if update_baseline else ""))
 
 
@@ -160,10 +163,11 @@ class DataScenario(BaseScenario):
 
     def recent_clause(self, con: duckdb.DuckDBPyConnection) -> str:
         """SQL predicate selecting the most-recent `recent_fraction` of rows."""
-        cutoff = con.execute(
+        row = con.execute(
             "select quantile_cont(epoch(txn_timestamp), ?) from raw_transactions",
             [1 - self.recent_fraction],
-        ).fetchone()[0]
+        ).fetchone()
+        cutoff = row[0] if row and row[0] is not None else 0
         return f"epoch(txn_timestamp) >= {cutoff}"
 
     @abstractmethod
@@ -247,6 +251,9 @@ class ModelScenario(BaseScenario):
     def apply(self, reingest_after: bool = True) -> None:
         desc = self.perturb()
         print(f"[{self.name}] {desc}")
+        if reingest_after:
+            print(f"\n[{self.name}] refreshing DataHub...")
+            reingest()
         print(f"\n[{self.name}] done. Run `python -m agent` to detect.")
 
 
@@ -380,7 +387,8 @@ def _clear_degraded_tags() -> int:
         return 0
 
     try:
-        graph = DataHubGraph(DataHubGraphConfig(server="http://localhost:8080"))
+        gms = os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
+        graph = DataHubGraph(DataHubGraphConfig(server=gms))
         tag_urn = builder.make_tag_urn(DEGRADED_TAG)
         urns = graph.get_urns_by_filter(entity_types=["dataset"], platform="dbt")
     except Exception:

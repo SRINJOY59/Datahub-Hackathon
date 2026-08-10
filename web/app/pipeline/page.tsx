@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import PageHeader from "@/components/PageHeader";
+import OnboardRepoModal from "@/components/OnboardRepoModal";
+import ChaosSimulatorModal from "@/components/ChaosSimulatorModal";
 import { fetchJournal } from "@/lib/queries";
 import type { JournalEntry } from "@/lib/types";
 
@@ -291,6 +293,8 @@ export default function PipelinePage() {
   const [loaded, setLoaded] = useState(false);
   const [logFilter, setLogFilter] = useState<string>("ALL");
   const [expandedRun, setExpandedRun] = useState<string | null>(null);
+  const [onboardModalOpen, setOnboardModalOpen] = useState(false);
+  const [chaosModalOpen, setChaosModalOpen] = useState(false);
 
   useEffect(() => {
     fetchJournal(60)
@@ -314,6 +318,24 @@ export default function PipelinePage() {
         title="Pipeline"
         subtitle="Traces, logs, and metrics across every pipeline run — correlated with the incident loop."
         live={runningCount > 0}
+        actions={
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => setChaosModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg border border-bad/40 bg-bad-soft/30 px-3.5 py-1.5 text-xs font-semibold text-bad hover:bg-bad-soft/50 transition"
+            >
+              <span>⚡</span>
+              <span>Break Prod (Chaos Simulator)</span>
+            </button>
+            <button
+              onClick={() => setOnboardModalOpen(true)}
+              className="flex items-center gap-1.5 rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-white shadow-md hover:opacity-90 transition"
+            >
+              <span>+</span>
+              <span>Connect Repository</span>
+            </button>
+          </div>
+        }
       />
 
       {/* ── Metric tiles ── */}
@@ -480,6 +502,23 @@ export default function PipelinePage() {
           ))}
         </div>
       </section>
+
+      {/* Modals */}
+      <OnboardRepoModal
+        open={onboardModalOpen}
+        onClose={() => setOnboardModalOpen(false)}
+        onSuccess={() => {
+          fetchJournal(60).then((j) => setJournal(j)).catch(() => {});
+        }}
+      />
+
+      <ChaosSimulatorModal
+        open={chaosModalOpen}
+        onClose={() => setChaosModalOpen(false)}
+        onDrillComplete={() => {
+          fetchJournal(60).then((j) => setJournal(j)).catch(() => {});
+        }}
+      />
     </div>
   );
 }

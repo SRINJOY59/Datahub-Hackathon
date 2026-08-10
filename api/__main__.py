@@ -5,6 +5,7 @@ For the combined process (webhooks + this API on one port), use
 """
 from __future__ import annotations
 
+import os
 import uvicorn
 
 from api.server import GRAPHQL_PATH, create_app
@@ -14,8 +15,10 @@ DEFAULT_PORT = 8091
 
 def main() -> None:
     app = create_app()
-    print(f"\nSentinel Dashboard API on http://127.0.0.1:{DEFAULT_PORT}{GRAPHQL_PATH}\n")
-    uvicorn.run(app, host="127.0.0.1", port=DEFAULT_PORT, log_level="info")
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", DEFAULT_PORT))
+    print(f"\nSentinel Dashboard API starting on http://{host}:{port}{GRAPHQL_PATH}\n")
+    uvicorn.run(app, host=host, port=port, log_level="info")
 
 
 if __name__ == "__main__":

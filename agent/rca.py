@@ -27,7 +27,7 @@ from agent.contracts import (
     RootCauseAnalysis,
     SignalType,
 )
-from agent.llm import LLMClient
+from agent.llm import LLMClient, TaskType
 from agent.prompts.rca import RCA_PROMPT, RCA_SYSTEM
 from agent.registry import build_probes
 from agent.schemas import RCAResult

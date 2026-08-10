@@ -77,7 +77,7 @@ export default function OverviewPage() {
       {error && (
         <div className="card border-bad/40 p-4 text-sm text-bad">
           Can&apos;t reach the backend. Is <code>python -m agent serve</code> running
-          on port 8090?
+          on port 8000?
         </div>
       )}
 

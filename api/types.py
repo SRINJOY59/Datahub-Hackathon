@@ -298,3 +298,66 @@ class SystemStatus:
     webhook_sources_enabled: list[str]
     sweep_interval_minutes: int
     sweep_status: Optional[SweepStatus] = None
+
+
+@strawberry.type
+class DiscoveredEntityItem:
+    name: str
+    kind: str
+    urn: str
+    file: str
+
+
+@strawberry.type
+class OnboardedRepoResult:
+    repo_name: str
+    repo_path: str
+    total_files_scanned: int
+    datasets_count: int
+    models_count: int
+    jobs_count: int
+    lineage_edges_count: int
+    mlflow_experiment_id: str
+    mlflow_experiment_name: str
+    datahub_graph_emitted: bool
+    github_workflow_content: str
+    scanned_at: str
+    entities: list[DiscoveredEntityItem] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
+class ChaosScenarioInfo:
+    id: str
+    name: str
+    category: str
+    description: str
+    signal_type: str
+    expected_root_cause: str
+
+
+@strawberry.type
+class ChaosDrillResult:
+    success: bool
+    scenario_id: str
+    scenario_name: str
+    incident_id: Optional[str] = None
+    signal_type: Optional[str] = None
+    status: str = "injected"
+    log: list[str] = strawberry.field(default_factory=list)
+    error: Optional[str] = None
+
+
+@strawberry.type
+class ConnectedRepository:
+    id: str
+    repo_name: str
+    repo_path: str
+    commit_sha: Optional[str] = None
+    datasets_count: int = 0
+    models_count: int = 0
+    jobs_count: int = 0
+    edges_count: int = 0
+    mlflow_experiment_id: Optional[str] = None
+    onboarded_at: str
+    is_active: bool = False
+    entities: list[DiscoveredEntityItem] = strawberry.field(default_factory=list)

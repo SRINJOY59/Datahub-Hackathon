@@ -378,7 +378,7 @@ export default function ApiHealthPage() {
 
       {error && (
         <div className="card border-bad/40 p-4 text-sm text-bad bg-bad-soft/40">
-          Cannot reach API backend. Ensure <code>python -m agent serve</code> or <code>python -m api</code> is running on port 8090.
+          Cannot reach API backend. Ensure <code>python -m agent serve</code> or <code>python -m api</code> is running on port 8000.
         </div>
       )}
 
@@ -865,7 +865,7 @@ export default function ApiHealthPage() {
 
       {/* DIFF VIEWER MODAL */}
       {selectedMigration && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
+        <div style={{ zIndex: 9999 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
           <div className="card w-full max-w-3xl max-h-[85vh] flex flex-col bg-surface border-border-strong p-6 space-y-4">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div>
@@ -911,7 +911,7 @@ export default function ApiHealthPage() {
 
       {/* AUTONOMOUS REMEDIATION LIVE PROGRESS MODAL */}
       {remediationModal?.open && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm">
+        <div style={{ zIndex: 9999 }} className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm">
           <div className="card w-full max-w-xl bg-surface border-border-strong p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-border pb-3">
               <div className="flex items-center gap-2">

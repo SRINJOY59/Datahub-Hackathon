@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import StatusPill from "./StatusPill";
+import RepoSelector from "./RepoSelector";
 
 const NAV: { href: string; label: string; icon: React.ReactNode; group: string }[] = [
   { group: "Monitor", href: "/", label: "Overview", icon: <IconGrid /> },
@@ -17,7 +18,7 @@ const NAV: { href: string; label: string; icon: React.ReactNode; group: string }
   { group: "Operate", href: "/chat", label: "Ask on-call", icon: <IconChat /> },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ onOpenConnectModal }: { onOpenConnectModal?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, username, email, signOut } = useAuth();
@@ -30,7 +31,7 @@ export default function Sidebar() {
 
   return (
     <aside className="sticky top-0 flex h-screen w-[228px] shrink-0 flex-col border-r border-border bg-surface/40">
-      <div className="flex items-center gap-2.5 px-5 py-5">
+      <div className="flex items-center gap-2.5 px-5 py-4 border-b border-border/40">
         <span className="relative flex h-2.5 w-2.5">
           <span className="pulse-live absolute inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
         </span>
@@ -40,6 +41,11 @@ export default function Sidebar() {
             autonomous incident response
           </p>
         </div>
+      </div>
+
+      {/* Active Repo Switcher */}
+      <div className="px-3 py-2.5 border-b border-border/40">
+        <RepoSelector onOpenConnectModal={onOpenConnectModal} />
       </div>
 
       <nav className="flex-1 overflow-y-auto scrollbar-thin px-3">

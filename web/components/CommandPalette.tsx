@@ -83,6 +83,7 @@ export default function CommandPalette() {
 
   return (
     <div
+      style={{ zIndex: 9999 }}
       className="fixed inset-0 z-50 flex items-start justify-center bg-black/60 pt-[12vh] backdrop-blur-sm"
       onClick={() => setOpen(false)}
     >

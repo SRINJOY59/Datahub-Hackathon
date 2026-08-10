@@ -32,4 +32,7 @@ source:
 sink:
   type: datahub-rest
   config:
-    server: "http://localhost:8080"
+    server: "${DATAHUB_GMS_URL:-http://localhost:8080}"
+    mode: "SYNC"
+    timeout_sec: 5
+    retry_max_times: 1

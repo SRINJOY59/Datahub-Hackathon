@@ -26,9 +26,11 @@ class DistributionDriftScenario(DataScenario):
 
     def inject(self, con: duckdb.DuckDBPyConnection) -> str:
         clause = self.recent_clause(con)
-        before = con.execute("select avg(amount) from raw_transactions").fetchone()[0]
+        row = con.execute("select avg(amount) from raw_transactions").fetchone()
+        before = row[0] if row and row[0] is not None else 0.0
         con.execute(f"update raw_transactions set amount = amount * 2.0 where {clause}")
-        after = con.execute("select avg(amount) from raw_transactions").fetchone()[0]
+        row = con.execute("select avg(amount) from raw_transactions").fetchone()
+        after = row[0] if row and row[0] is not None else 0.0
         return (f"recent transaction amounts drifted ~2x upward "
                 f"(raw avg {before:.2f} -> {after:.2f}); no nulls, no hard bound "
                 f"violation")

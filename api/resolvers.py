@@ -18,6 +18,7 @@ import strawberry
 from agent.journal import ActionJournal
 from agent.store import IncidentStore, shared_store
 from api import api_health, insights
+from api.shared import get_active_repo_urns
 from api.types import (
     ActionCount,
     ActionEntry,
@@ -44,6 +45,11 @@ from api.types import (
     TrustBadge,
     WebhookActivity,
     WebhookRun,
+    DiscoveredEntityItem,
+    OnboardedRepoResult,
+    ChaosScenarioInfo,
+    ChaosDrillResult,
+    ConnectedRepository,
 )
 
 
@@ -156,9 +162,11 @@ def _get_sweep_status() -> SweepStatus | None:
 @strawberry.type
 class Query:
     @strawberry.field
-    def incidents(self, status: Optional[str] = None, limit: int = 50) -> list[Incident]:
+    def incidents(self, status: Optional[str] = None, limit: int = 50,
+                  scoped: bool = True) -> list[Incident]:
         store: IncidentStore = shared_store()
-        rows = store.list(status=status, limit=limit)
+        urns = get_active_repo_urns() if scoped else None
+        rows = store.list(status=status, limit=limit, repo_urns=urns or None)
         return [_row_to_incident(r) for r in rows]
 
     @strawberry.field
@@ -174,7 +182,8 @@ class Query:
     @strawberry.field
     def stats(self) -> Stats:
         store: IncidentStore = shared_store()
-        s = store.stats()
+        urns = get_active_repo_urns() or None
+        s = store.stats(repo_urns=urns)
         by_type = [
             ChangeTypeCount(change_type=k, count=v)
             for k, v in sorted(s["by_change_type"].items(), key=lambda kv: -kv[1])
@@ -190,7 +199,8 @@ class Query:
 
     @strawberry.field
     def trends(self, days: int = 30) -> list[DayPoint]:
-        rows = shared_store().daily_series(days=days)
+        urns = get_active_repo_urns() or None
+        rows = shared_store().daily_series(days=days, repo_urns=urns)
         return [
             DayPoint(
                 day=r["day"], total=r["total"], resolved=r["resolved"],
@@ -223,7 +233,12 @@ class Query:
 
     @strawberry.field
     def journal(self, limit: int = 100) -> list[JournalEntry]:
-        return [JournalEntry(**row) for row in insights.journal_entries(limit=limit)]
+        entries = insights.journal_entries(limit=limit * 2)
+        urns = get_active_repo_urns()
+        if urns:
+            urn_set = set(urns)
+            entries = [e for e in entries if e.get("target") in urn_set or not urns]
+        return [JournalEntry(**row) for row in entries[:limit]]
 
     @strawberry.field
     def webhook_activity(self) -> WebhookActivity:
@@ -326,6 +341,82 @@ class Query:
             error=res.get("error"),
         )
 
+    # --- Chaos Engineering & Fire Drill Scenarios ------------------------- #
+    @strawberry.field
+    def chaos_scenarios(self) -> list[ChaosScenarioInfo]:
+        from scenarios import registry
+        items = []
+        for name in registry.names():
+            cls = registry.get(name)
+            doc = cls.__doc__.strip().split("\n")[0] if cls and cls.__doc__ else "Production chaos failure simulation"
+            sig = getattr(getattr(cls, "expectation", None), "signal_type", "ANOMALY")
+            cat = (
+                "Data Quality & Drift" if any(k in name for k in ["drift", "null", "volume", "stale", "duplicate"])
+                else "API & Vendor Deprecation" if "api" in name
+                else "ML Model & Training" if any(k in name for k in ["training", "model", "leakage", "skew"])
+                else "Pipeline Code & Schema"
+            )
+            items.append(ChaosScenarioInfo(
+                id=name,
+                name=name.replace("_", " ").title(),
+                category=cat,
+                description=doc,
+                signal_type=str(sig),
+                expected_root_cause=getattr(getattr(cls, "expectation", None), "root_cause_asset", "pipeline"),
+            ))
+        return items
+
+    @strawberry.field
+    def connected_repositories(self) -> list[ConnectedRepository]:
+        from api.repo_onboarding import list_connected_repositories
+        repos = list_connected_repositories()
+        res = []
+        for r in repos:
+            entities = [
+                DiscoveredEntityItem(name=e["name"], kind=e["kind"], urn=e["urn"], file=e["file"])
+                for e in r.get("entities", [])
+            ]
+            res.append(
+                ConnectedRepository(
+                    id=r["id"],
+                    repo_name=r["repo_name"],
+                    repo_path=r["repo_path"],
+                    commit_sha=r.get("commit_sha"),
+                    datasets_count=r.get("datasets_count", 0),
+                    models_count=r.get("models_count", 0),
+                    jobs_count=r.get("jobs_count", 0),
+                    edges_count=r.get("edges_count", 0),
+                    mlflow_experiment_id=r.get("mlflow_experiment_id"),
+                    onboarded_at=r.get("onboarded_at", ""),
+                    is_active=bool(r.get("is_active", False)),
+                    entities=entities,
+                )
+            )
+        return res
+
+    @strawberry.field
+    def active_repository(self) -> ConnectedRepository:
+        from api.repo_onboarding import get_active_repository
+        active = get_active_repository()
+        entities = [
+            DiscoveredEntityItem(name=e["name"], kind=e["kind"], urn=e["urn"], file=e["file"])
+            for e in active.get("entities", [])
+        ]
+        return ConnectedRepository(
+            id=active["id"],
+            repo_name=active["repo_name"],
+            repo_path=active["repo_path"],
+            commit_sha=active.get("commit_sha"),
+            datasets_count=active.get("datasets_count", 0),
+            models_count=active.get("models_count", 0),
+            jobs_count=active.get("jobs_count", 0),
+            edges_count=active.get("edges_count", 0),
+            mlflow_experiment_id=active.get("mlflow_experiment_id"),
+            onboarded_at=active.get("onboarded_at", ""),
+            is_active=True,
+            entities=entities,
+        )
+
 
 @strawberry.type
 class Mutation:
@@ -333,3 +424,77 @@ class Mutation:
     def noop(self) -> bool:
         """Placeholder — Strawberry requires at least one mutation field."""
         return True
+
+    @strawberry.mutation
+    def switch_active_repository(self, repo_id: str) -> ConnectedRepository:
+        """Switch the globally active repository context."""
+        from api.repo_onboarding import switch_active_repository as do_switch
+        r = do_switch(repo_id)
+        entities = [
+            DiscoveredEntityItem(name=e["name"], kind=e["kind"], urn=e["urn"], file=e["file"])
+            for e in r.get("entities", [])
+        ]
+        return ConnectedRepository(
+            id=r["id"],
+            repo_name=r["repo_name"],
+            repo_path=r["repo_path"],
+            commit_sha=r.get("commit_sha"),
+            datasets_count=r.get("datasets_count", 0),
+            models_count=r.get("models_count", 0),
+            jobs_count=r.get("jobs_count", 0),
+            edges_count=r.get("edges_count", 0),
+            mlflow_experiment_id=r.get("mlflow_experiment_id"),
+            onboarded_at=r.get("onboarded_at", ""),
+            is_active=True,
+            entities=entities,
+        )
+
+    @strawberry.mutation
+    def onboard_repository(self, url: str = "", branch: Optional[str] = None) -> OnboardedRepoResult:
+        """Scan repository AST, emit DataHub lineage graph, configure MLflow & CI/CD guard."""
+        from api.repo_onboarding import onboard_repository as do_onboard
+        res = do_onboard(url)
+        entities = [
+            DiscoveredEntityItem(name=e["name"], kind=e["kind"], urn=e["urn"], file=e["file"])
+            for e in res.entities
+        ]
+        return OnboardedRepoResult(
+            repo_name=res.repo_name,
+            repo_path=res.repo_path,
+            total_files_scanned=res.total_files_scanned,
+            datasets_count=res.datasets_count,
+            models_count=res.models_count,
+            jobs_count=res.jobs_count,
+            lineage_edges_count=res.lineage_edges_count,
+            mlflow_experiment_id=res.mlflow_experiment_id,
+            mlflow_experiment_name=res.mlflow_experiment_name,
+            datahub_graph_emitted=res.datahub_graph_emitted,
+            github_workflow_content=res.github_workflow_content,
+            scanned_at=res.scanned_at,
+            entities=entities,
+        )
+
+    @strawberry.mutation
+    def trigger_chaos_drill(self, scenario: str) -> ChaosDrillResult:
+        """Inject a production failure scenario and run the full Sentinel self-healing loop synchronously."""
+        from api.actions import run_drill_sync
+        try:
+            result = run_drill_sync(scenario)
+            return ChaosDrillResult(
+                success=result["success"],
+                scenario_id=scenario,
+                scenario_name=scenario.replace("_", " ").title(),
+                incident_id=result.get("incident_id"),
+                signal_type=result.get("signal_type"),
+                status=result["status"],
+                log=result["log"],
+                error=result.get("error"),
+            )
+        except Exception as e:
+            return ChaosDrillResult(
+                success=False,
+                scenario_id=scenario,
+                scenario_name=scenario.replace("_", " ").title(),
+                status="failed",
+                error=str(e),
+            )

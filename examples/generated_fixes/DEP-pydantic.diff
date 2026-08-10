@@ -1,23 +1,20 @@
---- a/ml/drift.py
-+++ b/ml/drift.py
-@@ -1,3 +1,4 @@
+--- a/src/data_validation.py
++++ b/src/data_validation.py
+@@ -1,2 +1,3 @@
 +# [Sentinel Auto-Migration (pydantic 2.7.0): Replace .dict() calls with .model_dump() across Pydantic model instances.]
- """Drift computation, shared by the scoring job and the drift detector.
- 
- The scoring job and the agent must agree on what "drifted" means, or the agent
+ # src/data_validation.py
+ # Target file for pydantic migration
 
---- a/ml/score.py
-+++ b/ml/score.py
-@@ -1,3 +1,4 @@
+--- a/src/feast_features.py
++++ b/src/feast_features.py
+@@ -1,2 +1,3 @@
 +# [Sentinel Auto-Migration (pydantic 2.7.0): Replace .dict() calls with .model_dump() across Pydantic model instances.]
- """Score 'live' traffic with the champion fraud model and emit a drift signal.
- 
- This simulates the deployed model. Each run:
+ # src/feast_features.py
+ # Target file for pydantic migration
 
---- a/ml/train.py
-+++ b/ml/train.py
-@@ -1,3 +1,4 @@
+--- a/src/serve_mlflow.py
++++ b/src/serve_mlflow.py
+@@ -1,2 +1,3 @@
 +# [Sentinel Auto-Migration (pydantic 2.7.0): Replace .dict() calls with .model_dump() across Pydantic model instances.]
- """Train the fraud-detection model on the dbt `training_dataset` and register it
- in the MLflow Model Registry with a `champion` alias.
- 
+ # src/serve_mlflow.py
+ # Target file for pydantic migration

@@ -10,6 +10,7 @@ good model without the operator having to remember to re-run training.
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 
 from scenarios.base import Expectation, ModelScenario
 
@@ -30,6 +31,7 @@ class TrainingRegressionScenario(ModelScenario):
         import mlflow
         import mlflow.sklearn
         from sklearn.ensemble import GradientBoostingClassifier
+        from sklearn.impute import SimpleImputer
         from sklearn.metrics import roc_auc_score
         from sklearn.model_selection import train_test_split
 
@@ -54,6 +56,11 @@ class TrainingRegressionScenario(ModelScenario):
 
         X, y = df[FEATURES], df[TARGET]
         X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.3, random_state=0)
+
+        # Impute NaN values before fitting GradientBoostingClassifier
+        imputer = SimpleImputer(strategy="median")
+        X_tr = pd.DataFrame(imputer.fit_transform(X_tr), columns=FEATURES, index=X_tr.index)
+        X_te = pd.DataFrame(imputer.transform(X_te), columns=FEATURES, index=X_te.index)
 
         with mlflow.start_run(run_name="fraud_gbc_BAD"):
             clf = GradientBoostingClassifier(n_estimators=10, max_depth=1, random_state=0)

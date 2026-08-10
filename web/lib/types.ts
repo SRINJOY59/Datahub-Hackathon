@@ -242,3 +242,68 @@ export interface RemediateAdvisoryResult {
   filesModified: number;
   error: string | null;
 }
+
+export interface DiscoveredEntityItem {
+  name: string;
+  kind: string;
+  urn: string;
+  file: string;
+}
+
+export interface OnboardedRepoResult {
+  repoName: string;
+  repoPath: string;
+  totalFilesScanned: number;
+  datasetsCount: number;
+  modelsCount: number;
+  jobsCount: number;
+  lineageEdgesCount: number;
+  mlflowExperimentId: string;
+  mlflowExperimentName: string;
+  datahubGraphEmitted: boolean;
+  githubWorkflowContent: string;
+  scannedAt: string;
+  entities: DiscoveredEntityItem[];
+}
+
+export interface ChaosScenarioInfo {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  signalType: string;
+  expectedRootCause: string;
+}
+
+export interface ChaosDrillResult {
+  success: boolean;
+  scenarioId: string;
+  scenarioName: string;
+  incidentId: string | null;
+  signalType: string | null;
+  assetUrn?: string | null;
+  summary?: string | null;
+  rootCauseAsset?: string | null;
+  rootCauseColumn?: string | null;
+  actionsTaken?: string[];
+  pr?: string | null;
+  changeType?: string | null;
+  status: string;
+  log: string[];
+  error: string | null;
+}
+
+export interface ConnectedRepository {
+  id: string;
+  repoName: string;
+  repoPath: string;
+  commitSha: string | null;
+  datasetsCount: number;
+  modelsCount: number;
+  jobsCount: number;
+  edgesCount: number;
+  mlflowExperimentId: string | null;
+  onboardedAt: string;
+  isActive: boolean;
+  entities?: DiscoveredEntityItem[];
+}

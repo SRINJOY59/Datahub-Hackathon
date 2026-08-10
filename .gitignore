@@ -37,3 +37,6 @@ Thumbs.db
 .claude/
 
 supabase/
+
+test_clone_dir/
+.sentinel_cache/

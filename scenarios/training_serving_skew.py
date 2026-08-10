@@ -58,11 +58,11 @@ class TrainingServingSkewScenario(ModelScenario):
         try:
             before = con.execute(
                 "select avg(amount) from raw_transactions"
-            ).fetchone()[0]
+            ).fetchone()[0] or 0.0
             con.execute(f"update raw_transactions set amount = amount * {SHIFT}")
             after = con.execute(
                 "select avg(amount) from raw_transactions"
-            ).fetchone()[0]
+            ).fetchone()[0] or 0.0
         finally:
             con.close()
 

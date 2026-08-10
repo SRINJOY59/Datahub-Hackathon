@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { fetchIncidents } from "@/lib/queries";
 import type { Incident } from "@/lib/types";
 import { StatusBadge, TierBadge } from "@/components/Badge";
+import ChaosSimulatorModal from "@/components/ChaosSimulatorModal";
 
 type SortKey = "detectedAt" | "costUsd" | "status";
 
@@ -20,8 +21,9 @@ export default function IncidentsPage() {
   const [query, setQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("detectedAt");
   const [sortDesc, setSortDesc] = useState(true);
+  const [chaosModalOpen, setChaosModalOpen] = useState(false);
 
-  useEffect(() => {
+  const loadIncidents = () => {
     fetchIncidents({ limit: 200 })
       .then((data) => {
         setIncidents(data);
@@ -29,6 +31,10 @@ export default function IncidentsPage() {
       })
       .catch(() => setError(true))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadIncidents();
   }, []);
 
   const filtered = useMemo(() => {
@@ -72,12 +78,21 @@ export default function IncidentsPage() {
             {filtered.length} of {incidents.length}
           </p>
         </div>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search asset, id, change type…"
-          className="w-72 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
-        />
+        <div className="flex items-center gap-3">
+          <input
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search asset, id, change type…"
+            className="w-72 rounded-lg border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent"
+          />
+          <button
+            onClick={() => setChaosModalOpen(true)}
+            className="flex items-center gap-1.5 rounded-lg border border-bad/40 bg-bad-soft/30 px-3.5 py-2 text-xs font-semibold text-bad hover:bg-bad-soft/50 transition shrink-0"
+          >
+            <span>⚡</span>
+            <span>Create Incident (Chaos Simulator)</span>
+          </button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-1.5">
@@ -179,6 +194,14 @@ export default function IncidentsPage() {
           </tbody>
         </table>
       </div>
+
+      <ChaosSimulatorModal
+        open={chaosModalOpen}
+        onClose={() => setChaosModalOpen(false)}
+        onDrillComplete={() => {
+          loadIncidents();
+        }}
+      />
     </div>
   );
 }

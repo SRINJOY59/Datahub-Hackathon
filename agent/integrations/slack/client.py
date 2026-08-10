@@ -23,19 +23,34 @@ class SlackClient:
             return False
 
     def _cache_channels(self) -> None:
+        if not self._client:
+            return
+        # Query public channels first (requires channels:read)
         try:
-            resp = self._client.conversations_list(
-                types="public_channel,private_channel",
-            )
+            resp = self._client.conversations_list(types="public_channel", limit=200)
             for ch in resp.get("channels", []):
                 self._channel_ids[f"#{ch['name']}"] = ch["id"]
+                self._channel_ids[ch["name"]] = ch["id"]
+        except Exception:
+            pass
+
+        # Query private channels if groups:read scope is present
+        try:
+            resp = self._client.conversations_list(types="private_channel", limit=200)
+            for ch in resp.get("channels", []):
+                self._channel_ids[f"#{ch['name']}"] = ch["id"]
+                self._channel_ids[ch["name"]] = ch["id"]
         except Exception:
             pass
 
     def _resolve(self, channel: str) -> str:
-        if not channel.startswith("#"):
-            return channel
-        return self._channel_ids.get(channel, channel)
+        # Check cache if name or #name matches
+        if channel in self._channel_ids:
+            return self._channel_ids[channel]
+        cleaned = channel.lstrip("#")
+        if cleaned in self._channel_ids:
+            return self._channel_ids[cleaned]
+        return channel
 
     def post_message(
         self,

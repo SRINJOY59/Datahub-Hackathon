@@ -7,7 +7,7 @@ from pathlib import Path
 
 import yaml
 
-_CONFIG_PATH = Path("config/pagerduty.yaml")
+_CONFIG_PATH = Path(__file__).resolve().parents[3] / "config" / "pagerduty.yaml"
 
 
 @dataclass

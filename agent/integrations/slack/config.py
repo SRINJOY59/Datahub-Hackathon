@@ -27,6 +27,9 @@ class SlackConfig:
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     one_thread_per_incident: bool = True
 
+    def channel_for(self, role: str) -> str:
+        return self.channels.get(role, self.channels.get("engineer", "#all-prodml"))
+
     @classmethod
     def load(cls) -> SlackConfig:
         if not _CONFIG_PATH.exists():

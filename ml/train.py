@@ -23,6 +23,7 @@ from sklearn.metrics import (
     recall_score,
     roc_auc_score,
 )
+from sklearn.impute import SimpleImputer
 from sklearn.model_selection import train_test_split
 
 import duckdb
@@ -58,6 +59,12 @@ def main() -> None:
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.25, random_state=42, stratify=y
     )
+
+    # Impute NaN values (e.g. stddev for single-txn users, rates for new merchants).
+    # Fit on train only to avoid data leakage.
+    imputer = SimpleImputer(strategy="median")
+    X_train = pd.DataFrame(imputer.fit_transform(X_train), columns=FEATURES, index=X_train.index)
+    X_test = pd.DataFrame(imputer.transform(X_test), columns=FEATURES, index=X_test.index)
 
     with mlflow.start_run(run_name="fraud_gbc") as run:
         # Record the training-data lineage (surfaced by DataHub's MLflow source).

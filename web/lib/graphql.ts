@@ -5,7 +5,17 @@
 // doesn't have. If subscriptions or a larger query surface show up later,
 // that's the point to revisit this call.
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8090";
+const getApiUrl = () => {
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  if (typeof window !== "undefined") {
+    return ""; // Relative URL /graphql when deployed behind same host/reverse proxy
+  }
+  return "http://127.0.0.1:8000";
+};
+
+const API_URL = getApiUrl();
 
 export class GraphQLError extends Error {
   constructor(message: string, public errors: unknown[]) {
