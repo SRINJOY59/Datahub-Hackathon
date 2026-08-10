@@ -10,12 +10,25 @@
 
 When upstream data breaks, models drift, or breaking API migrations occur, OmniSRE automatically detects anomalies, traverses the DataHub graph to root-cause failures to the exact upstream column and commit, computes financial blast-radius, executes reversible Time-Machine mitigations, and writes verified post-mortems back into DataHub dataset and model cards.
 
-<p align="center">
-  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
-</p>
+<div align="center">
+
+### 🎬 Live Autonomous Self-Healing Demo in Action
+
+![OmniSRE Live Incident Remediation Demo](assets/omnisre_demo.gif)
+
+<video src="https://github.com/SRINJOY59/Datahub-Hackathon/raw/main/assets/OmniSRE_Demo_Final.mp4" controls="controls" autoplay="autoplay" loop="loop" muted="muted" playsinline="playsinline" width="100%">
+  <source src="assets/OmniSRE_Demo_Final.mp4" type="video/mp4" />
+  Your browser does not support HTML5 video. <a href="assets/OmniSRE_Demo_Final.mp4">Download/Play the full video demo (assets/OmniSRE_Demo_Final.mp4)</a>.
+</video>
 
 <p align="center">
-  <a href="assets/OmniSRE_Demo_Final.mp4">▶️ <b>Watch Full Video Demo (assets/OmniSRE_Demo_Final.mp4)</b></a>
+  <sub>🎥 <b>Full 1080p Video Demo:</b> <a href="assets/OmniSRE_Demo_Final.mp4">assets/OmniSRE_Demo_Final.mp4</a> | 🚀 <b>Live Interactive Cloud App:</b> <a href="https://sentinel-web-55utjgkpwq-uc.a.run.app">sentinel-web-55utjgkpwq-uc.a.run.app</a></sub>
+</p>
+
+</div>
+
+<p align="center">
+  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
 </p>
 
 ---
