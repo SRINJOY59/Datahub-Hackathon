@@ -271,11 +271,6 @@ omnisre/
     └── components/            # Agentic terminal, Chaos modal, Lineage viewer
 ```
 
----
-
-## 🏆 Hackathon Video Demo
-
-A full 3-minute video presentation and voiceover script is available in [VOICEOVER_DEMO_SCRIPT.md](file:///c:/Users/Srinjoy/OneDrive/Desktop/DataHub/VOICEOVER_DEMO_SCRIPT.md).
 
 ---
 
