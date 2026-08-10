@@ -160,8 +160,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-          echo "Waiting 60 seconds for DataHub containers to initialize on the VM..."
-          sleep 60
+          echo "Waiting for DataHub GMS at $DATAHUB_GMS_URL to become ready..."
+          READY=0
+          for i in {1..30}; do
+            if curl -s --max-time 3 "$DATAHUB_GMS_URL/health" 2>/dev/null | grep -qi "ok"; then
+              echo "DataHub GMS is healthy and ready!"
+              READY=1
+              break
+            fi
+            echo "DataHub GMS initializing on VM... ($i/30)"
+            sleep 10
+          done
 
           echo "Step 1: Generating synthetic raw data..."
           python pipeline/generate_raw_data.py
