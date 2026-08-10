@@ -10,6 +10,14 @@
 
 When upstream data breaks, models drift, or breaking API migrations occur, OmniSRE automatically detects anomalies, traverses the DataHub graph to root-cause failures to the exact upstream column and commit, computes financial blast-radius, executes reversible Time-Machine mitigations, and writes verified post-mortems back into DataHub dataset and model cards.
 
+<p align="center">
+  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
+</p>
+
+<p align="center">
+  <a href="assets/OmniSRE_Demo_Final.mp4">▶️ <b>Watch Full Video Demo (assets/OmniSRE_Demo_Final.mp4)</b></a>
+</p>
+
 ---
 
 ## ⚡ The Problem: Silent Pipeline Collapse
