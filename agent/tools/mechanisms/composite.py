@@ -18,6 +18,7 @@ mitigations it had not performed.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -50,19 +51,19 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class RealMechanisms(Mechanisms):
-    def __init__(self, gms_server: str = "http://localhost:8080",
+    def __init__(self, gms_server: Optional[str] = None,
                  llm: Optional[LLMClient] = None,
                  memory: Optional[MemoryStore] = None,
                  journal: Optional[ActionJournal] = None) -> None:
-        self.gms_server = gms_server
-        self.context = DataHubContextTool(gms_server)
-        self.detectors = build_detectors(gms_server)
-        self.checks = build_checks(gms_server)
-        self.actuators = build_actuators(gms_server)
+        self.gms_server = gms_server or os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
+        self.context = DataHubContextTool(self.gms_server)
+        self.detectors = build_detectors(self.gms_server)
+        self.checks = build_checks(self.gms_server)
+        self.actuators = build_actuators(self.gms_server)
         self.codefix = CodeFixTool(llm=llm)
         self.memory = memory
         self.journal = journal or ActionJournal()
-        self.writeback = DataHubWriteBack(gms_server, memory=memory)
+        self.writeback = DataHubWriteBack(self.gms_server, memory=memory)
         # set by the orchestrator so write_back can reach downstream assets
         self.last_context: Optional[ContextBundle] = None
 

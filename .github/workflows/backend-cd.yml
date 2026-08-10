@@ -72,7 +72,7 @@ jobs:
             --cpu=2
             --min-instances=1
             --max-instances=10
-            --set-env-vars=OPENROUTER_MODEL=${{ vars.OPENROUTER_MODEL || 'nvidia/nemotron-3-ultra-550b-a55b:free' }},GITHUB_REPO=${{ github.repository }},DATAHUB_GMS_URL=${{ vars.DATAHUB_GMS_URL || 'http://localhost:8080' }}
+            --set-env-vars=OPENROUTER_MODEL=${{ vars.OPENROUTER_MODEL || 'cohere/north-mini-code:free' }},OPENROUTER_MODEL_CODE=${{ vars.OPENROUTER_MODEL_CODE || 'cohere/north-mini-code:free' }},OPENROUTER_MODEL_REASONING=${{ vars.OPENROUTER_MODEL_REASONING || 'nvidia/nemotron-3-ultra-550b-a55b:free' }},OPENROUTER_MODEL_CHAT=${{ vars.OPENROUTER_MODEL_CHAT || 'google/gemma-4-31b-it:free' }},OPENROUTER_MODEL_FAST=${{ vars.OPENROUTER_MODEL_FAST || 'nvidia/nemotron-nano-9b-v2:free' }},GITHUB_REPO=${{ github.repository }},DATAHUB_GMS_URL=${{ vars.DATAHUB_GMS_URL || 'http://localhost:8080' }}
             --set-secrets=OPENROUTER_API_KEY=OPENROUTER_API_KEY:latest,GITHUB_TOKEN=GITHUB_TOKEN:latest,SLACK_BOT_TOKEN=SLACK_BOT_TOKEN:latest,SLACK_APP_TOKEN=SLACK_APP_TOKEN:latest,SLACK_SIGNING_SECRET=SLACK_SIGNING_SECRET:latest,WEBHOOK_SECRET_GENERIC=WEBHOOK_SECRET_GENERIC:latest,PAGERDUTY_ROUTING_KEY=PAGERDUTY_ROUTING_KEY:latest
 
       - name: Output Service URL

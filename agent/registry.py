@@ -14,13 +14,14 @@ plugin would be silently rebuilt in a half-configured state.
 from __future__ import annotations
 
 import inspect
+import os
 from typing import TypeVar
 
 from agent.contracts import ActionType
 
 T = TypeVar("T")
 
-DEFAULT_GMS = "http://localhost:8080"
+DEFAULT_GMS = os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
 
 _DETECTORS: list[type] = []
 _PROBES: list[type] = []
