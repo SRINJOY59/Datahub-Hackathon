@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+FROM python:3.11-slim
+
+# Prevent Python from writing .pyc files and buffer stdout
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8090
+
+WORKDIR /app
+
+# Install necessary system build tools and git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application source code
+COPY . .
+
+# Create runtime directories for SQLite stores, DuckDB snapshots, and MLflow
+RUN mkdir -p /app/.sentinel /app/mlruns /app/pipeline/dbt
+
+EXPOSE 8090
+
+# Entrypoint starts FastAPI webhook server + GraphQL API + APScheduler registry sweep
+CMD ["python", "-m", "agent", "serve"]

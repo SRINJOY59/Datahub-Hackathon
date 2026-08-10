@@ -1,0 +1,86 @@
+name: Frontend CD (Deploy Sentinel Web Console to Cloud Run)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - ".github/workflows/frontend-cd.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+  GCP_REGION: ${{ vars.GCP_REGION }}
+  GAR_REPO: ${{ vars.GAR_REPOSITORY || 'sentinel-docker-repo' }}
+  SERVICE_NAME: sentinel-web
+
+jobs:
+  deploy-frontend:
+    name: Build & Deploy Web Console
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - name: Resolve Backend API Cloud Run URL
+        id: get-backend-url
+        run: |
+          BACKEND_URL=$(gcloud run services describe sentinel-api --region=${{ env.GCP_REGION }} --format='value(status.url)' 2>/dev/null || echo "${{ vars.NEXT_PUBLIC_API_URL }}")
+          echo "Resolved Backend API URL: $BACKEND_URL"
+          echo "backend_url=$BACKEND_URL" >> $GITHUB_OUTPUT
+
+      - name: Build and Push Docker Image
+        run: |
+          IMAGE_URI="${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.SERVICE_NAME }}"
+          
+          docker build \
+            --build-arg NEXT_PUBLIC_API_URL="${{ steps.get-backend-url.outputs.backend_url }}" \
+            --build-arg NEXT_PUBLIC_SUPABASE_URL="${{ vars.NEXT_PUBLIC_SUPABASE_URL }}" \
+            --build-arg NEXT_PUBLIC_SUPABASE_ANON_KEY="${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}" \
+            -t "$IMAGE_URI:${{ github.sha }}" \
+            -t "$IMAGE_URI:latest" \
+            -f web/Dockerfile ./web
+
+          docker push "$IMAGE_URI:${{ github.sha }}"
+          docker push "$IMAGE_URI:latest"
+
+      - name: Deploy to Google Cloud Run
+        id: deploy
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: ${{ env.SERVICE_NAME }}
+          image: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ env.GCP_PROJECT_ID }}/${{ env.GAR_REPO }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          region: ${{ env.GCP_REGION }}
+          flags: |
+            --port=3000
+            --allow-unauthenticated
+            --memory=1Gi
+            --cpu=1
+            --min-instances=1
+            --max-instances=10
+            --set-env-vars=NEXT_PUBLIC_API_URL=${{ steps.get-backend-url.outputs.backend_url }},NEXT_PUBLIC_SUPABASE_URL=${{ vars.NEXT_PUBLIC_SUPABASE_URL }},NEXT_PUBLIC_SUPABASE_ANON_KEY=${{ secrets.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+
+      - name: Output Service URL
+        run: |
+          echo "================================================="
+          echo "Sentinel Web Console Deployed Successfully!"
+          echo "Web UI URL: ${{ steps.deploy.outputs.url }}"
+          echo "================================================="
