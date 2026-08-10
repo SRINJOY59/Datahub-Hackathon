@@ -6,14 +6,13 @@ on:
       action:
         description: "Action to perform on DataHub VM"
         required: true
-        default: "run-ingestion"
+        default: "provision"
         type: choice
         options:
-          - "run-ingestion"
           - "provision"
+          - "run-ingestion"
           - "start"
           - "stop"
-          - "check-status"
 
 permissions:
   contents: read
@@ -50,7 +49,7 @@ jobs:
           echo "Checking firewall rules for ports 8080 & 9002..."
           if ! gcloud compute firewall-rules describe allow-datahub --quiet 2>/dev/null; then
             gcloud compute firewall-rules create allow-datahub \
-              --allow tcp:8080,tcp:9002 \
+              --allow tcp:8080,tcp:9002,tcp:22 \
               --target-tags=datahub-server \
               --description="Allow DataHub GMS and Web UI"
           fi
@@ -58,56 +57,64 @@ jobs:
           EXISTING_ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' 2>/dev/null | head -n 1)
 
           if [ -n "$EXISTING_ZONE" ]; then
-            echo "VM '${{ env.VM_NAME }}' already exists in zone '$EXISTING_ZONE'. Starting it..."
-            gcloud compute instances start ${{ env.VM_NAME }} --zone="$EXISTING_ZONE" --quiet
-          else
-            echo "Searching for available capacity across GCP regions..."
-            ZONES=("us-east1-b" "us-east1-c" "us-east1-d" "us-east4-a" "us-west1-b" "us-central1-a")
-            CREATED=0
+            echo "Removing existing DataHub VM in zone '$EXISTING_ZONE' to ensure fresh installation..."
+            gcloud compute instances delete ${{ env.VM_NAME }} --zone="$EXISTING_ZONE" --quiet
+          fi
 
-            for ZONE in "${ZONES[@]}"; do
-              echo "Attempting to create DataHub VM in zone $ZONE..."
-              if gcloud compute instances create ${{ env.VM_NAME }} \
-                --zone="$ZONE" \
-                --machine-type=e2-standard-2 \
-                --image-family=ubuntu-2204-lts \
-                --image-project=ubuntu-os-cloud \
-                --boot-disk-size=40GB \
-                --tags=datahub-server,http-server,https-server \
-                --metadata=startup-script='#!/bin/bash
-                exec > >(tee /var/log/datahub-startup.log) 2>&1
-                echo "=== Starting DataHub VM Setup ==="
-                apt-get update
-                apt-get install -y docker.io python3-pip curl
-                systemctl enable --now docker
+          echo "Searching for available capacity across GCP regions..."
+          ZONES=("us-east1-b" "us-east1-c" "us-east1-d" "us-east4-a" "us-west1-b" "us-central1-a")
+          CREATED=0
 
-                # Create 4GB swap to prevent JVM/Elasticsearch OOM on 8GB VM
-                if [ ! -f /swapfile ]; then
-                  fallocate -l 4G /swapfile
-                  chmod 600 /swapfile
-                  mkswap /swapfile
-                  swapon /swapfile
-                  echo "/swapfile none swap sw 0 0" >> /etc/fstab
-                fi
+          for ZONE in "${ZONES[@]}"; do
+            echo "Attempting to create DataHub VM in zone $ZONE..."
+            if gcloud compute instances create ${{ env.VM_NAME }} \
+              --zone="$ZONE" \
+              --machine-type=e2-standard-2 \
+              --image-family=ubuntu-2204-lts \
+              --image-project=ubuntu-os-cloud \
+              --boot-disk-size=40GB \
+              --tags=datahub-server,http-server,https-server \
+              --metadata=startup-script='#!/bin/bash
+              exec > >(tee /var/log/datahub-startup.log) 2>&1
+              echo "=== Starting DataHub VM Setup ==="
+              apt-get update
+              apt-get install -y docker.io python3-pip curl
+              systemctl enable --now docker
 
-                pip3 install --no-cache-dir acryl-datahub==1.7.0
-                export HOME=/root
-                export PYTHONIOENCODING=utf-8
-                datahub docker quickstart
-                echo "=== DataHub Quickstart Launched ==="
-                '; then
-                echo "Successfully created DataHub VM in zone $ZONE!"
-                CREATED=1
-                break
-              else
-                echo "Zone $ZONE unavailable, trying next..."
+              # Install official Docker Compose v2 binary
+              echo "Installing Docker Compose..."
+              curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+              chmod +x /usr/local/bin/docker-compose
+              mkdir -p /usr/local/lib/docker/cli-plugins
+              cp /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+
+              # Create 4GB swap to prevent JVM/Elasticsearch OOM on 8GB VM
+              if [ ! -f /swapfile ]; then
+                fallocate -l 4G /swapfile
+                chmod 600 /swapfile
+                mkswap /swapfile
+                swapon /swapfile
+                echo "/swapfile none swap sw 0 0" >> /etc/fstab
               fi
-            done
 
-            if [ $CREATED -ne 1 ]; then
-              echo "ERROR: Failed to create VM across candidate regions."
-              exit 1
+              # Install DataHub CLI and start quickstart
+              pip3 install --no-cache-dir acryl-datahub==1.7.0
+              export HOME=/root
+              export PYTHONIOENCODING=utf-8
+              datahub docker quickstart
+              echo "=== DataHub Quickstart Successfully Launched ==="
+              '; then
+              echo "Successfully created DataHub VM in zone $ZONE!"
+              CREATED=1
+              break
+            else
+              echo "Zone $ZONE unavailable, trying next..."
             fi
+          done
+
+          if [ $CREATED -ne 1 ]; then
+            echo "ERROR: Failed to create VM across candidate regions."
+            exit 1
           fi
 
       # ----------------------------------------------------------- #
@@ -133,7 +140,7 @@ jobs:
           ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
           if [ -n "$ZONE" ]; then
             gcloud compute instances stop ${{ env.VM_NAME }} --zone="$ZONE" --quiet
-            echo "DataHub VM stopped."
+            echo "DataHub VM stopped to save credits."
           fi
 
       # ----------------------------------------------------------- #
@@ -174,7 +181,7 @@ jobs:
               READY=1
               break
             fi
-            echo "Waiting for DataHub Java GMS & Docker containers to initialize (attempt $i/36, status: $HTTP_CODE)..."
+            echo "Waiting for DataHub Docker containers & Java GMS to initialize (attempt $i/36, status: $HTTP_CODE)..."
             sleep 10
           done
 
