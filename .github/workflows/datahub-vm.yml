@@ -20,7 +20,6 @@ permissions:
 
 env:
   GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'project-1e232997-e446-4263-977' }}
-  GCP_REGION: us-central1
   VM_NAME: datahub-vm
 
 jobs:
@@ -42,7 +41,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       # ----------------------------------------------------------- #
-      # 1. Provision VM with automatic multi-zone fallback
+      # 1. Provision VM with multi-region failover (us-east1 / us-east4 / us-west1 / us-central1)
       # ----------------------------------------------------------- #
       - name: Provision DataHub Compute Engine VM
         if: ${{ github.event.inputs.action == 'provision' }}
@@ -55,19 +54,30 @@ jobs:
               --description="Allow DataHub GMS and Web UI"
           fi
 
-          # Check if VM already exists across any zone in the region
+          # Check if VM already exists across any zone in the project
           EXISTING_ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' 2>/dev/null | head -n 1)
 
           if [ -n "$EXISTING_ZONE" ]; then
             echo "VM '${{ env.VM_NAME }}' already exists in zone '$EXISTING_ZONE'. Starting it..."
             gcloud compute instances start ${{ env.VM_NAME }} --zone="$EXISTING_ZONE" --quiet
           else
-            echo "Creating new DataHub VM on Free Tier (e2-standard-2)..."
-            ZONES=("us-central1-b" "us-central1-c" "us-central1-f" "us-central1-a")
+            echo "Searching for available capacity across GCP regions..."
+            ZONES=(
+              "us-east1-b"
+              "us-east1-c"
+              "us-east1-d"
+              "us-east4-a"
+              "us-east4-b"
+              "us-west1-b"
+              "us-west1-c"
+              "us-central1-b"
+              "us-central1-c"
+              "us-central1-a"
+            )
             CREATED=0
 
             for ZONE in "${ZONES[@]}"; do
-              echo "Attempting to create VM in zone $ZONE..."
+              echo "Attempting to create DataHub VM in zone $ZONE..."
               if gcloud compute instances create ${{ env.VM_NAME }} \
                 --zone="$ZONE" \
                 --machine-type=e2-standard-2 \
@@ -82,16 +92,16 @@ jobs:
                 export PYTHONIOENCODING=utf-8
                 datahub docker quickstart
                 '; then
-                echo "Successfully created DataHub VM in zone $ZONE!"
+                echo "🎉 Successfully created DataHub VM in zone $ZONE!"
                 CREATED=1
                 break
               else
-                echo "Zone $ZONE busy or unavailable, trying next zone..."
+                echo "Zone $ZONE unavailable, trying next region/zone..."
               fi
             done
 
             if [ $CREATED -ne 1 ]; then
-              echo "ERROR: Failed to create VM across all candidate zones."
+              echo "ERROR: Failed to create VM across candidate regions."
               exit 1
             fi
           fi
