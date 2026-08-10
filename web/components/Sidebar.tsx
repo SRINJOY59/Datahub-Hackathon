@@ -7,7 +7,7 @@ import StatusPill from "./StatusPill";
 import RepoSelector from "./RepoSelector";
 
 const NAV: { href: string; label: string; icon: React.ReactNode; group: string }[] = [
-  { group: "Monitor", href: "/", label: "Overview", icon: <IconGrid /> },
+  { group: "Monitor", href: "/overview", label: "Overview", icon: <IconGrid /> },
   { group: "Monitor", href: "/incidents", label: "Incidents", icon: <IconAlert /> },
   { group: "Monitor", href: "/trends", label: "Trends", icon: <IconChart /> },
   { group: "Monitor", href: "/pipeline", label: "Pipeline", icon: <IconPipeline /> },
@@ -16,6 +16,7 @@ const NAV: { href: string; label: string; icon: React.ReactNode; group: string }
   { group: "Catalog", href: "/runbooks", label: "Runbooks", icon: <IconBook /> },
   { group: "Operate", href: "/activity", label: "Activity", icon: <IconPulse /> },
   { group: "Operate", href: "/chat", label: "Ask on-call", icon: <IconChat /> },
+  { group: "Explore", href: "/", label: "Product Home", icon: <IconHome /> },
 ];
 
 export default function Sidebar({ onOpenConnectModal }: { onOpenConnectModal?: () => void }) {
@@ -184,4 +185,7 @@ function IconChat() {
 }
 function IconApi() {
   return base(<><path d="m18 16 4-4-4-4" /><path d="m6 8-4 4 4 4" /><path d="m14.5 4-5 16" /></>);
+}
+function IconHome() {
+  return base(<><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /><polyline points="9 22 9 12 15 12 15 22" /></>);
 }

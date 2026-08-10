@@ -7,16 +7,16 @@ import CommandPalette from "@/components/CommandPalette";
 import OnboardRepoModal from "@/components/OnboardRepoModal";
 import AuthGuard from "@/components/AuthGuard";
 
-const AUTH_PATHS = ["/login", "/signup"];
+const FULL_WIDTH_PATHS = ["/", "/login", "/signup"];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const isAuthPage = AUTH_PATHS.includes(pathname);
+  const isFullWidth = FULL_WIDTH_PATHS.includes(pathname);
   const [connectModalOpen, setConnectModalOpen] = useState(false);
 
   return (
     <AuthGuard>
-      {isAuthPage ? (
+      {isFullWidth ? (
         <main className="min-h-screen w-full">{children}</main>
       ) : (
         <>

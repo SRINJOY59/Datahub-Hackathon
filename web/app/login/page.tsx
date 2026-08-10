@@ -45,7 +45,7 @@ function LoginForm() {
             <span className="pulse-live absolute inline-flex h-2 w-2 rounded-full bg-accent" />
           </span>
           <span className="text-xs font-semibold tracking-wider text-foreground">
-            SENTINEL PLATFORM
+            OMNISRE PLATFORM
           </span>
         </div>
         <h1 className="mt-4 text-2xl font-bold tracking-tight text-foreground sm:text-3xl">
@@ -60,18 +60,6 @@ function LoginForm() {
       <div className="card relative overflow-hidden rounded-2xl border border-border-strong bg-surface/80 p-6 shadow-2xl backdrop-blur-xl sm:p-8">
         {/* Subtle top highlight */}
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-accent/40 to-transparent" />
-
-        {!isConfigured && (
-          <div className="mb-6 rounded-lg border border-accent/20 bg-accent-soft p-3 text-xs text-foreground/90">
-            <div className="flex items-center gap-2 font-medium text-accent">
-              <IconInfo />
-              <span>Supabase Ready</span>
-            </div>
-            <p className="mt-1 text-[11px] leading-relaxed text-muted">
-              Configure <code className="text-foreground">NEXT_PUBLIC_SUPABASE_URL</code> in your environment for live cloud authentication.
-            </p>
-          </div>
-        )}
 
         {error && (
           <div className="mb-5 flex items-start gap-2.5 rounded-lg border border-bad/30 bg-bad-soft p-3 text-xs text-foreground animate-in fade-in duration-200">
