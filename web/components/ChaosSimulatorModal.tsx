@@ -339,7 +339,7 @@ export default function ChaosSimulatorModal({ open, onClose, onDrillComplete }: 
                   Production Chaos & Autonomous Self-Healing Simulator
                 </h2>
                 <span className="rounded-full bg-accent-soft px-2 py-0.5 text-[10px] font-mono font-medium text-accent border border-accent/30">
-                  Sentinel v1.4
+                  OmniSRE v2.0
                 </span>
               </div>
               <p className="text-xs text-muted">
@@ -505,7 +505,7 @@ export default function ChaosSimulatorModal({ open, onClose, onDrillComplete }: 
               <div className="rounded-xl border border-warn/30 bg-warn-soft/10 p-3.5 text-xs text-muted flex items-start gap-3">
                 <span className="text-base text-warn shrink-0">⚠️</span>
                 <p className="text-[11px] leading-relaxed">
-                  Executing this drill triggers real fault injection in DuckDB & dbt, exercises the AST lineage engine, fires DataHub telemetry alerts, and invokes the autonomous Sentinel LLM Agent to remediate and write back post-mortems.
+                  Executing this drill triggers real fault injection in DuckDB & dbt, exercises the AST lineage engine, fires DataHub telemetry alerts, and invokes the autonomous OmniSRE LLM Agent to remediate and write back post-mortems.
                 </p>
               </div>
 
@@ -662,7 +662,7 @@ export default function ChaosSimulatorModal({ open, onClose, onDrillComplete }: 
                     <span className="inline-block h-2.5 w-2.5 rounded-full bg-yellow-500/80" />
                     <span className="inline-block h-2.5 w-2.5 rounded-full bg-green-500/80" />
                     <span className="ml-2 font-mono text-[10px] text-muted-dim tracking-wider">
-                      sentinel-agent // sse-event-stream // worker-01
+                      omnisre-agent // sse-event-stream // worker-01
                     </span>
                   </div>
 
@@ -707,7 +707,7 @@ export default function ChaosSimulatorModal({ open, onClose, onDrillComplete }: 
                   {injecting && (
                     <div className="flex items-center gap-2 text-accent text-[11px] pt-1">
                       <span className="inline-block h-2 w-2 rounded-full bg-accent animate-ping" />
-                      <span className="animate-pulse">Sentinel Agent executing self-healing loop...</span>
+                      <span className="animate-pulse">OmniSRE Agent executing self-healing loop...</span>
                     </div>
                   )}
                   <div ref={terminalEndRef} />

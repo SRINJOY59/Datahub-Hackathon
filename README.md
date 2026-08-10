@@ -1,614 +1,284 @@
-# Sentinel
+# 🛡️ OmniSRE — Multi-Repo Self-Healing Data & ML Governance Platform on DataHub
 
-Autonomous incident-remediation agent for data & ML pipelines, built on DataHub.
+[![DataHub Compatible](https://img.shields.io/badge/DataHub-MCP%20%26%20REST-blue?style=flat-square&logo=datahub)](https://datahubproject.io/)
+[![Next.js](https://img.shields.io/badge/Next.js-16.3%20Turbopack-black?style=flat-square&logo=next.js)](https://nextjs.org/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python)](https://python.org)
+[![FastAPI](https://img.shields.io/badge/FastAPI-GraphQL%20%2B%20SSE-009688?style=flat-square&logo=fastapi)](https://fastapi.tiangolo.com)
+[![Slack & PagerDuty](https://img.shields.io/badge/Alerting-Slack%20%2B%20PagerDuty-4A154B?style=flat-square&logo=slack)](https://slack.com)
 
-Sentinel detects incidents, root-causes them over the real DataHub context graph
-(lineage, schema, ownership, tags) with grounded evidence, computes blast radius
-across the `raw → feature → model → deployment` chain, proposes a remediation, and
-writes a post-mortem back so the graph gets smarter each time.
+**OmniSRE** is the first enterprise-grade, autonomous Site Reliability Engineering (SRE) platform purpose-built for modern Data and Machine Learning infrastructure on **DataHub**.
 
-**Incident classes it handles today**
-
-- **Data quality** — failed dbt assertions + profiling: null spike, scale shift,
-  distribution drift, schema change, duplicate batch.
-- **Silent data failures** — the ones every assertion passes: a feed that stopped
-  delivering, a batch that arrived at a fraction of its size.
-- **Silent model failures** — prediction drift, training/serving skew, and label
-  leakage (a model that got *suspiciously good* because the target leaked into a
-  feature).
-- **Dependency / API breaking change** — a vendor advisory triggers a codebase
-  scan and an LLM-generated migration PR ("self-maintaining APIs").
-- **ML training regression** — a champion model whose eval metrics dropped.
-
-Half of those leave **all 22 dbt assertions green**. A pipeline can be badly
-wrong while every test it has says otherwise, which is why detection here does
-not rely on assertions alone.
-
-**How the RCA pipeline works**
-
-```
-detect            read context        investigate            recall            synthesize          remediate + learn
-(Detectors)  ->   (DataHub graph) ->  (Probes: profiling, -> (Memory: prior -> (structured RCA  ->  (fix / rollback +
-                                       lineage, codebase)     incidents)        over evidence)       post-mortem to graph)
-```
-
-New incident types are added as plugins; the core doesn't change. There are four
-extension surfaces, all registered by a decorator:
-
-| Surface | Answers | Registered with |
-|---|---|---|
-| `Detector` | how do we notice? | `@detector` |
-| `Probe` | what grounded evidence explains it? | `@probe` |
-| `Actuator` | how do we fix it, reversibly? | `@actuator` |
-| `CheckRunner` | how do we prove the fix worked? | `@check` |
-
-See `TASK_DISTRIBUTION.md` for the phase plan and product roadmap.
+When upstream data breaks, models drift, or breaking API migrations occur, OmniSRE automatically detects anomalies, traverses the DataHub graph to root-cause failures to the exact upstream column and commit, computes financial blast-radius, executes reversible Time-Machine mitigations, and writes verified post-mortems back into DataHub dataset and model cards.
 
 ---
 
-## Prerequisites
+## ⚡ The Problem: Silent Pipeline Collapse
 
-- Python 3.11
-- Docker Desktop (running)
+Modern data and ML pipelines fail silently:
+- **Schema & Scale Drift**: Upstream migrations rename or rescale columns, corrupting downstream feature stores.
+- **Silent Model Decay**: Distribution drift and label leakage cause models to produce flawed predictions while **all 22 dbt assertions stay green**.
+- **Human Bottlenecks**: Data engineers spend over **40% of their working hours** acting as human circuit breakers — manually tracing lineage, debugging dbt models, and coordinating frantic Slack incident threads.
+
+---
+
+## 🚀 The Solution: OmniSRE Closed-Loop Architecture
+
+OmniSRE transforms DataHub from a passive metadata catalog into an **active, self-healing control plane**:
+
+```
+ ┌───────────────┐     ┌────────────────┐     ┌────────────────┐     ┌────────────────┐
+ │ 1. INGESTION  │ ──► │  2. DETECTION  │ ──► │  3. CAUSALITY  │ ──► │   4. MEMORY    │
+ │ Multi-Repo    │     │ 13 Tripwires   │     │ DataHub Graph  │     │ Prior Incident │
+ │ AST Lineage   │     │ Assertions/Skew│     │ Lineage Probes │     │ Knowledge Base │
+ └───────────────┘     └────────────────┘     └────────────────┘     └────────────────┘
+                                                                             │
+ ┌───────────────┐     ┌────────────────┐     ┌────────────────┐             ▼
+ │ 8. WRITEBACK  │ ◄── │ 7. VALIDATION  │ ◄── │  6. MITIGATION │ ◄── ┌────────────────┐
+ │ Post-Mortems  │     │ Time-Machine   │     │ Pin, Pause,    │     │ 5. REASONING   │
+ │ Slack/Pager   │     │ Health Gate    │     │ Quarantine, PR │     │ Multi-Tier LLM │
+ └───────────────┘     └────────────────┘     └────────────────┘     │ 3-Tier Policy  │
+                                                                     └────────────────┘
+```
+
+---
+
+## ✨ Key Capabilities
+
+### 1. 🔍 Zero-Config Multi-Repo AST Lineage Engine
+- Connect any GitHub repository or local workspace in seconds.
+- Python AST scanner semantically analyzes pipeline source code, extracts `dbt` transforms, `scikit-learn`, `PyTorch`, and `XGBoost` models, hyperparameters, and datasets.
+- Automatically emits complete dataset, job, and model lineage into DataHub via OpenAPI Metadata Change Proposals (MCP).
+
+### 2. ⚡ Live Agentic Streaming Console (Next.js 16 + SSE)
+- A high-tech SRE workspace with real-time SSE streaming.
+- **9-Stage Remediation Stepper**: Visualizes the agent progressing across *Inject $\rightarrow$ Detect $\rightarrow$ Lineage $\rightarrow$ LLM Causality $\rightarrow$ Policy $\rightarrow$ Actuate $\rightarrow$ Validate $\rightarrow$ Graph Writeback*.
+- **Syntax-Highlighted Live Terminal**: Color-coded logs (`[detect]`, `[rca]`, `[policy]`, `[act]`, `[validate]`, `[resolve]`) with auto-scroll and copy capabilities.
+
+### 3. 🛡️ 3-Tier Safety Policy & Human-in-the-Loop Gating
+- **`AUTO` Tier**: Routine, fully reversible actions (`tag_asset`, `pause_job`) execute autonomously.
+- **`PR_ONLY` Tier**: Code migrations and model repointing generate reviewable GitHub PRs.
+- **`HUMAN_ONLY` Tier**: High-risk mutations require approval via Slack buttons and trigger automated PagerDuty escalation.
+
+### 4. ⏪ Time-Machine Snapshot Journaling
+- Every mitigation action is journaled with a strict inverse operation.
+- If post-mitigation validation assertions fail, OmniSRE automatically rolls back mutating changes while holding protective warnings in place.
+
+### 5. 📊 DataHub Post-Mortem Writeback & Financial ROI
+- Writes structured post-mortems directly into DataHub dataset properties and ML model cards.
+- Computes real-world financial exposure avoided (e.g. `$12,000+` per downtime incident) based on configurable downstream consumer value models.
+- Broadcasts formatted Block Kit notifications to Slack (`#all-prodml`) with exact repository and commit attribution.
+
+### 6. 🧩 Extensible DataHub Skills & Plugin Registry
+OmniSRE features a modular **Skills Registry** architecture (`agent/registry.py`) allowing engineers to drop in new diagnostic probes, tripwires, and actuators without modifying the core agent:
+
+| Skill Surface | Purpose | Decorator | Example Plugins |
+| :--- | :--- | :--- | :--- |
+| **`Detector`** | *How do we notice anomalies?* | `@detector` | `AssertionDetector`, `VolumeDetector`, `FreshnessDetector`, `ModelDriftDetector`, `GitCommitDetector` |
+| **`Probe`** | *What grounded evidence explains it?* | `@probe` | `ColumnLineageProbe`, `DataProfileProbe`, `GitBlameProbe`, `PredictionDriftProbe`, `LeakageProbe` |
+| **`Actuator`** | *How do we fix it reversibly?* | `@actuator` | `PinFeatureActuator`, `QuarantineActuator`, `TagAssetActuator`, `PauseJobActuator`, `RepointModelActuator` |
+| **`CheckRunner`** | *How do we prove the fix worked?* | `@check` | `DbtCheckRunner`, `DataInvariantsCheck`, `ModelInputCheck`, `ModelPerformanceCheck` |
+
+```python
+from agent.registry import probe
+from agent.contracts import Evidence, Incident
+
+@probe
+class CustomDistributionProbe:
+    """A custom diagnostic skill that inspects DataHub column statistics."""
+    def __init__(self, gms_server: str = "http://localhost:8080"):
+        self.gms = gms_server
+
+    def applies_to(self, incident: Incident) -> bool:
+        return incident.signal_type == "distribution_drift"
+
+    def investigate(self, incident: Incident) -> list[Evidence]:
+        # Perform graph & statistical analysis over DataHub metadata
+        return [Evidence(name="kolmogorov_smirnov", value={"p_value": 0.001})]
+```
+
+---
+
+## 🧪 13 Production Chaos Scenarios
+
+OmniSRE includes an integrated chaos engineering suite testing data, silent drift, and ML failures:
+
+| Scenario | Category | Trigger Mechanism | Expected Remediation |
+| :--- | :--- | :--- | :--- |
+| `schema_change` | Data Quality | Upstream drops/renames `amount` $\rightarrow$ `amount_cents` | Pin feature to last-good snapshot |
+| `null_spike` | Data Quality | Upstream batch delivers NULL transaction amounts | Quarantine partition + pin feature |
+| `distribution_drift`| Data Quality | Subtle 2x upward shift in recent amounts | Tag degraded + repoint model |
+| `duplicate_batch` | Data Quality | Non-idempotent batch retry duplicates transaction IDs | Deduplicate partition in place |
+| `stale_feed` | Silent Failure | Upstream feed stops delivering new records | Pause scoring job + page owners |
+| `volume_collapse` | Silent Failure | Batch arrives at 40% of usual volume (missing rows) | Pin feature from snapshot |
+| `model_drift` | Silent Model | Uniform repricing shifts model predictions (dbt green) | Tag asset + rollback model alias |
+| `training_serving_skew`| Silent Model | Serving inputs move away from fitted training set | Containment: pause job + retrain |
+| `label_leakage` | Silent Model | Fraud surcharge leaks into features ($ROC \rightarrow 1.0$) | Pause scoring + propose feature diff |
+| `api_breaking_change` | Supply Chain | Vendor ships breaking `scikit-learn` parameter update | Auto-synthesize migration PR diff |
+| `training_regression` | ML Training | Evaluation ROC-AUC drops below champion threshold | Block promotion + pin champion alias |
+| `risky_commit` | Governance | Unreviewed commit modifies critical pipeline source | Tag downstream + notify commit author |
+| `unit_bug` | Data Quality | Amounts reported in cents instead of dollars (100x bug)| Quarantine + restore feature |
+
+---
+
+## 🛠️ Quickstart & Setup Guide
+
+### 1. Prerequisites
+- Python 3.11+
+- Node.js 18+ & npm
+- Docker Desktop (for DataHub local quickstart)
 - Git
-- ~8 GB free RAM for the DataHub quickstart containers
 
-## Setup
-
-### 1. Clone and install
+### 2. Clone & Install Dependencies
 
 ```bash
-git clone <your-repo-url> sentinel
-cd sentinel
+# Clone the repository
+git clone https://github.com/SRINJOY59/Datahub-Hackathon.git omnisre
+cd omnisre
 
+# Backend environment setup
 python -m venv .venv
-.venv\Scripts\activate            # Windows
-source .venv/bin/activate         # macOS/Linux
+.venv\Scripts\activate          # Windows
+# source .venv/bin/activate       # macOS / Linux
 
 pip install -r requirements.txt
+
+# Frontend dependencies
+cd web
+npm install
+cd ..
 ```
 
-### 2. Configure the LLM (recommended)
+### 3. Environment Configuration
 
-RCA uses an LLM via [OpenRouter](https://openrouter.ai) (OpenAI-compatible).
-Without a key the agent still runs, using a deterministic RCA fallback.
-
+Copy the example environment configuration:
 ```bash
 cp .env.example .env
-# then set in .env:
-#   OPENROUTER_API_KEY=sk-or-...
-#   OPENROUTER_MODEL=nvidia/nemotron-3-ultra-550b-a55b:free   # any OpenRouter model
 ```
 
-`.env` is gitignored — never commit your key.
+Fill in your API keys in `.env`:
+```ini
+# DataHub GMS URL (defaults to quickstart)
+DATAHUB_GMS_URL=http://localhost:8080
 
-### 3. Start DataHub
+# Multi-Tier LLM Routing (OpenRouter / OpenAI compatible)
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_MODEL_REASONING=nvidia/nemotron-3-ultra-550b-a55b:free
+OPENROUTER_MODEL_CODE=cohere/north-mini-code:free
+
+# Slack Alerting & Approvals
+SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=xapp-...
+
+# PagerDuty Escalation
+PAGERDUTY_ROUTING_KEY=...
+```
+
+### 4. Start DataHub Quickstart
 
 ```bash
 datahub docker quickstart
 ```
+*Confirm the DataHub UI is accessible at `http://localhost:9002`.*
 
-On Windows the CLI may error on a unicode character at the very end — the stack
-still started. Set `PYTHONIOENCODING=utf-8` to silence it (`set` on Windows,
-`export` on macOS/Linux). Then confirm the UI at http://localhost:9002
-(login `datahub` / `datahub`); it's empty until ingestion.
-
-### 4. Build the data pipeline
+### 5. Build Seed Warehouse & Initial Baseline
 
 ```bash
-python pipeline/generate_raw_data.py     # synthetic transaction seed
-
-cd pipeline/dbt
-dbt seed          --profiles-dir .
-dbt run           --profiles-dir .
-dbt docs generate --profiles-dir .        # manifest + catalog
-dbt build         --profiles-dir .        # run + test -> assertions
-cd ../..
-```
-
-All 22 dbt tests should pass on clean data.
-
-### 5. Train the model
-
-```bash
-python -m ml.train   # trains + registers fraud_detection_model @champion in MLflow
-python -m ml.score   # scores current features, saves the drift baseline
-```
-
-### 6. Ingest into DataHub
-
-```bash
-python -m ingestion
-```
-
-Runs both ingestion recipes (dbt + MLflow), wires the ML lineage, and applies
-governance (tags + owners). Resolves all paths from the repo root, so it works
-from any directory.
-
-### 7. Verify
-
-Open http://localhost:9002 and search `fraud`. You should see 10 datasets with
-table- and column-level lineage, 22 assertions, and `fraud_detection_model` with
-a training job, metrics, and a scoring deployment. Open the model's **Lineage**
-tab for the full `raw_transactions → features → training_dataset → model →
-deployment` chain.
-
----
-
-## Running the RCA pipeline
-
-Every incident is a three-step loop: **inject a scenario → run the agent →
-reset**. `python -m agent` runs the full pipeline (detect → context →
-investigate → recall → RCA → remediate → post-mortem) against live DataHub.
-
-List scenarios any time. Scenarios marked `[silent: dbt stays green]` break the
-pipeline *without* tripping a single assertion — the failures a test suite can't
-see:
-
-```bash
-python -m scenarios list
-```
-
-### Capture the "last known good" state first
-
-Before injecting anything, give the agent something to roll back to:
-
-```bash
-python -m scenarios snapshot
-```
-
-This copies every base table into a `sentinel_snap` schema inside
-`pipeline/dbt/fraud.duckdb` and records the pipeline's healthy shape (row counts,
-newest timestamps) to `.sentinel/baselines.json`. `python -m scenarios reset`
-does it automatically whenever the assertions come back green — it deliberately
-skips the capture when they don't, so a broken state can never become the thing
-rollbacks restore to.
-
-### Data incident (assertion + profiling)
-
-```bash
-python -m scenarios unit_bug     # amounts reported in cents (100x scale shift)
-python -m agent
+# Generate seed data and run dbt transforms
+python pipeline/generate_raw_data.py
 python -m scenarios reset
 ```
 
-Expect: the agent detects the failed assertion, profiles upstream tables, and
-pins `raw_transactions.amount` as a `scale_shift` with real numbers (recent vs
-historical mean) at high confidence — then **quarantines the offending rows,
-restores the table from the last-good snapshot, tags the downstream assets, and
-re-runs the assertions to confirm it worked.** Try `null_spike`,
-`distribution_drift` (subtle — no hard violation), and `schema_change` the same
-way.
-
-What counts as an "offending row" comes from the last-good snapshot, not from any
-knowledge of how the data was broken: a value outside the range ever seen while
-the pipeline was healthy is one the pipeline was never built to handle.
-
-### Dependency / API breaking change ("self-maintaining APIs")
+### 6. Start the OmniSRE Unified Server
 
 ```bash
-python -m scenarios api_breaking_change   # publishes a vendor advisory
-python -m agent
-python -m scenarios reset
-```
-
-Expect: the agent detects the advisory, scans the **codebase** using the AST index
-for affected call-sites, traces them across the DataHub lineage graph to the
-impacted ML model and downstream scoring services, and writes a real multi-file
-migration diff to `examples/generated_fixes/<incident>.diff` (or opens a draft PR
-when `GITHUB_TOKEN` and `GITHUB_REPO` are configured in `.env`).
-
-Every fix is verified in an isolated shadow environment (`verify_python`) before
-being proposed. External API providers can also publish advisories directly to the
-webhook endpoint (`POST /api/v1/advisory`), and SREs can inspect the full blast
-radius and trigger automated migrations from the dashboard at `/api-health`.
-
-### Silent failures — the ones dbt cannot see
-
-These leave **all 22 assertions passing**. Check for yourself between the inject
-and the agent run:
-
-```bash
-python -m scenarios stale_feed          # the feed stopped delivering
-python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('dbt green:', D().test().ok)"
-python -m agent                          # detects anyway, and CONTAINS
-python -m scenarios reset
-```
-
-Expect `stale_feed` to be **contained**, not resolved: the missing rows cannot be
-conjured, so the agent flags every downstream asset, opens the scoring breaker,
-pages the owner, and leaves the protection up. Confirm it held:
-
-```bash
-cat .sentinel/breakers/fraud_scoring_api.json
-python -m ml.score                       # refuses to run
-```
-
-The others follow the same three-step loop:
-
-| Scenario | What breaks | Outcome |
-|---|---|---|
-| `volume_collapse` | 60% of rows never arrive | **repaired** — pinned back from the last-good snapshot |
-| `model_drift` | a uniform repricing shifts predictions | **repaired** — champion repointed |
-| `training_serving_skew` | serving features drift from the training distribution | **contained** — only retraining truly fixes it |
-| `label_leakage` | a label-derived surcharge leaks into `amount`; `roc_auc` hits 0.998 | **contained** + a diff removing the feature* |
-| `duplicate_batch` | a batch is delivered twice | **repaired** — deduplicated |
-
-\* The containment — breaker, tags, escalation — is deterministic and always
-happens. The **diff needs the LLM**, and on a free-tier model it intermittently
-returns nothing; the agent then falls back to its deterministic RCA and proposes
-no fix. That degradation is by design, but it means the diff is best-effort
-rather than guaranteed.
-
-`label_leakage` is the one worth watching. A detector that only checks for
-metrics *falling* would wave it through and ship the model. It is also the
-clearest case of the agent knowing what it cannot do: the leak is in the data, so
-no earlier model helps — every one of them was fitted to a distribution the
-leaked feature no longer matches. It stops serving, warns downstream, and hands
-over the diff.
-
-```bash
-python -m scenarios label_leakage && python -m agent
-cat examples/generated_fixes/LEAK-*.diff      # removes `amount` from FEATURES
-python -m scenarios reset
-```
-
-### ML training regression
-
-```bash
-python -m scenarios training_regression   # ships a deliberately weak champion
-python -m agent
-python -m scenarios reset                  # restores the champion automatically
-```
-
-Expect: the agent reads the champion's MLflow metrics, flags the `roc_auc`
-regression below threshold, root-causes it, and **moves the `champion` alias back
-to the last validated version.** Confirm with:
-
-```bash
-python -c "from agent.tools.warehouse.champion import ChampionMetrics as C; v=C().current(); print('champion v'+v.version, round(v.roc_auc,4))"
-```
-
-The bad model version is deliberately **not** tagged `validation_status=passed`,
-which is how the rollback tells a version worth returning to from one that
-shipped broken. `reset` re-points the `champion` alias at the newest validated
-version, so `python -m ml.train` is no longer needed to recover.
-
-### Notes
-
-- **No LLM key?** The agent still runs — RCA uses a deterministic, evidence-based
-  fallback instead of the LLM narrative.
-- **Offline smoke test:** `python -m agent --fake` runs the full loop on canned
-  data with no DataHub or LLM key.
-- **What's real:** all of it. Detection, context, RCA, memory, fix generation and
-  the mitigations — the agent moves rows, restores tables, repoints the MLflow
-  champion, tags assets and opens circuit breakers, every action journaled with a
-  working inverse. See `TASK_DISTRIBUTION.md` for what is deliberately out of
-  scope.
-
----
-
-## Other things it does
-
-```bash
-python -m agent drill <scenario>   # break it on purpose, then watch it heal
-python -m agent --shadow           # decide what to do, record it, change nothing
-python -m agent digest             # what it did, or would have done
-python -m agent badges             # health grade on every asset
-python -m agent runbooks           # write runbooks from what it has learned
-```
-
-**Fire drill.** An agent nobody has seen fail is an agent nobody should trust, so
-this is re-runnable on demand rather than demonstrated once: inject a real
-failure, detect it, root-cause it, fix it, verify. The pass condition is the
-scenario's own declared expectation, so a drill checks the agent noticed *the
-right thing* rather than merely noticing something.
-
-**Shadow mode** is the on-ramp. The agent reasons all the way to a plan and
-records it, applies nothing, and leaves the incident open — then `digest` tells
-you what it would have done. Run it for a week before you let it act.
-
-**Trust badges** put a 0-100 score and an A–D grade on each asset in DataHub,
-computed from failing assertions, open incidents, and deviation from the recorded
-baseline. The inputs are published next to the score, because a health grade
-nobody can explain is one nobody will act on. The grade refreshes whenever an
-incident closes — including a *contained* one, which is when a low grade matters
-most. The score and its arithmetic are written into the asset's editable
-description (the catalog "About" box), so a human browsing the table sees the same
-health the agent does.
-
-**Incident cost.** Each resolved incident carries an estimated business exposure,
-shown in the badge and the agent log. Sentinel does not invent the figure: it
-measures the real downstream blast radius from the lineage graph and applies the
-rates in **`config/cost_model.yaml`** — which are *yours* to set (per-consumer
-rates, assumed MTTR, per-change-type severity). Every estimate cites its
-assumptions, flags when it fell back to illustrative defaults, and produces no
-dollar figure at all when you set `enabled: false`. The number is only ever as
-good as your config, so it always shows its work.
-
-**Runbooks.** Every resolved incident leaves a post-mortem. Once there are
-several of the same kind, `runbooks` reads them back and writes down the
-procedure already implicit in them, registering it as a DataHub **`AgentSkill`** —
-discoverable by the next person *and* the next agent, beside the assets it
-applies to.
-
-**Root cause names the commit.** The codebase index already maps each source file
-to the asset it produces. Read backwards, that turns "`raw_transactions.amount`
-shifted 100x" into "commit `b6a87ca` by SRINJOY59 changed the ingestion" — which
-is what someone actually needs in order to fix it.
-
-**Nothing is promoted untested.** A rollback target is scored against today's
-data before the champion alias moves, and a generated code fix is parsed before
-it is proposed. Neither touches production; both produce a before/after you can
-put in a PR.
-
-**Reads DataHub through the MCP Server.** Set `SENTINEL_USE_MCP=1` and Sentinel
-reads lineage and schema through the official
-[DataHub MCP Server](https://docs.datahub.com/docs/features/feature-guides/mcp) —
-the same `mcp-server-datahub` that Claude Desktop and Cursor use — instead of the
-Python SDK. The server runs isolated via `uvx mcp-server-datahub@latest` (needs
-[`uv`](https://docs.astral.sh/uv/)) against the local Core instance; if it can't
-start, Sentinel falls back to the SDK, so the flag is always safe to leave on.
-
----
-
-## What the agent actually does to your system
-
-Every mitigation is real and every one of them is reversible. When the agent
-acts, it writes what it did *and how to undo it* to `.sentinel/journal.jsonl`
-before the action takes effect, so a rollback never depends on the agent still
-being alive.
-
-| Action | What changes on disk / in DataHub |
-|---|---|
-| `quarantine` | rows outside the healthy range move to `sentinel_quarantine.<table>__<incident>` |
-| `pin_feature` | the table is restored from the `last_good` snapshot, then dbt rebuilds downstream |
-| `dedupe_partition` | duplicate keys are dropped, first arrival kept |
-| `repoint_model` | the MLflow `champion` alias moves to the newest **validated** healthy version |
-| `tag_asset` | downstream assets get `Sentinel-Degraded` in DataHub |
-| `pause_job` | a breaker opens and **`python -m ml.score` refuses to run** |
-
-Then the validation gate runs — dbt assertions, model metrics, the model's input
-distributions, and the volume / freshness invariants. Nothing is reported as
-resolved that a check did not independently confirm.
-
-### Repaired, contained, or rolled back
-
-Not every incident can be fixed, and pretending otherwise is worse than saying so.
-
-| Gate result | What the agent does |
-|---|---|
-| **green** | resolved. Protection is lifted automatically — breaker closed, downstream flags cleared — and the post-mortem written to the graph. |
-| **red, after a repair attempt** | the data actions are withdrawn through the journal, but **the protective ones stay**: the pipeline is still bad, so the warning stands. Owners are paged. |
-| **red, and no repair was possible** | **contained.** Data that never arrived cannot be restored from a snapshot. The tags and breaker hold, the incident stays open with `Sentinel-Degraded` in place, `Sentinel-Resolved` is withheld, and a post-mortem is recorded as *contained, awaiting human* — so memory learns from the incidents the agent cannot fix too. |
-
-### How much it is allowed to do on its own
-
-Actions split by what they touch. *Protective* ones (tag, pause) only reduce
-harm, so they run at every tier — withholding them while waiting for a human is
-itself the risky choice. *Mutating* ones (pin, quarantine, dedupe, repoint)
-change data or what is serving.
-
-| Tier | Trigger | Behaviour |
-|---|---|---|
-| `auto` | no sensitive tags, high confidence, small blast radius | acts, no PR needed |
-| `pr_only` | `Tier-Critical` / `PII` / low confidence / wide blast radius | mitigates now, opens a fix for review |
----
-
-## Web Dashboard & Pipeline Observability
-
-The Next.js dashboard provides a live command center for data engineers and on-call operators:
-
-```bash
-# In terminal 1: Start the Sentinel backend & webhook server (port 8090)
+# Starts GraphQL API, Webhook Listeners, SSE Stream, and Slack Socket worker
 python -m agent serve
+```
 
-# In terminal 2: Start the Next.js UI (port 3000)
+### 7. Launch the Next.js Web Console
+
+In a separate terminal:
+```bash
 cd web
-npm install
 npm run dev
 ```
 
-Visit **http://localhost:3000** to explore:
-- **Overview (`/`)**: Live MTTR, resolved vs. open incidents, exposure avoided, and autonomy breakdown.
-- **Incidents (`/incidents`)**: Searchable, filterable list with full root-cause narratives, action timelines, cost breakdowns, and draft PR links.
-- **Pipeline (`/pipeline`)**: Stage-by-stage execution traces, real-time log streaming with level filters (INFO/WARN/ERROR/DEBUG), records/hr throughput, p95 latency, and error rate sparklines.
-- **Trends (`/trends`)**: 7/30/90-day time-series of incident frequencies, exposure amounts, and MTTR curves.
-- **Asset Health (`/assets`)**: Trust scores (0–100) and reliability grades (A–D) computed from assertion failures, drift, freshness lag, and past incidents.
-- **API Health & Self-Maintaining APIs (`/api-health`)**: Automated API breaking-change intelligence, codebase dependency inventory with status badges, DataHub lineage-traced blast radius visualizer, interactive multi-file diff inspector for auto-generated PRs, on-demand SRE dependency scan trigger, and live vendor webhook simulation.
-- **Runbooks (`/runbooks`)**: Autonomous `AgentSkill` runbooks synthesized from resolved incident post-mortems and registered in DataHub.
-- **Activity (`/activity`)**: Append-only action journal, manual fire drill trigger, and one-click rollback.
-- **Ask On-Call (`/chat`)**: Incident-grounded assistant with full Markdown rendering, code snippets, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
-
-### REST & Webhook Endpoints
-
-In addition to GraphQL at `/graphql`, the backend serves dedicated operational and webhook endpoints:
-- `POST /api/v1/advisory`: Webhook for API vendors and package registries to publish breaking-change advisories.
-- `POST /api/v1/advisories/sync-registry`: Triggers autonomous PyPI / GitHub registry monitor to check for new upstream releases.
-- `POST /api/v1/dependencies/scan`: SRE trigger for an immediate codebase dependency and advisory sweep.
-- `GET /api/v1/dependencies/blast-radius?package=...`: Fast query computing the DataHub lineage blast radius of a package change.
-- `GET /api/v1/dependencies/stats`: Aggregate health metrics for platform engineering dashboards.
-
-### Populating Demo / Seed Data
-
-To populate the dashboard with realistic incidents, traces, and journal entries across all 14 change types and 12 production datasets:
-
-```bash
-python scripts/seed_incidents.py
-```
-
-This writes directly to `.sentinel/incidents.db` (SQLite) and `.sentinel/journal.jsonl`, generating 35+ realistic incidents with root causes, costs ($500–$25K), narratives, and action timelines.
+Open **`http://localhost:3000`** in your browser to access the OmniSRE dashboard!
 
 ---
 
-## Working state on disk
+## 🖥️ Running a Live Chaos Fire Drill
 
-Two directories hold the agent's own state. Both are gitignored and both are safe
-to delete — you lose the rollback history, not the pipeline.
+You can trigger autonomous drills from either the Web Console or CLI:
 
-| Path | What it is |
-|---|---|
-| `.sentinel/baselines.json` | the pipeline's healthy shape; how silent failures (stale feed, volume collapse) are detected at all |
-| `.sentinel/advisories/*.json` | published vendor advisories awaiting the dependency detector |
-| `.sentinel/journal.jsonl` | every action taken (or, in shadow mode, simulated) and the inverse that undoes it — audit log, rollback source, and digest input |
-| `.sentinel/breakers/*.json` | open circuit breakers; `ml/score.py` refuses to run while one exists |
-| `sentinel_snap` schema in `fraud.duckdb` | point-in-time table copies the Time Machine restores from |
-| `sentinel_quarantine` schema in `fraud.duckdb` | rows isolated from a bad batch, kept per incident for inspection |
+### Via Web Console:
+1. Open `http://localhost:3000/incidents`.
+2. Click **`⚡ Create Incident (Chaos Simulator)`**.
+3. Select any of the 13 production scenarios (e.g. `schema_change`).
+4. Click **`⚡ Launch Fire Drill`** and watch the real-time agentic self-healing loop stream live.
 
-Inspect them any time:
-
+### Via CLI:
 ```bash
-cat .sentinel/journal.jsonl        # what the agent did, and how to undo it
-cat .sentinel/baselines.json
-python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print(S().labelled_tables('last_good'))"
-```
+# Trigger specific scenario drill with real-time terminal output
+python -m agent drill schema_change
 
-Roll an incident back by hand — the same path the failed-validation branch takes:
-
-```bash
-python -c "from agent.tools.mechanisms.composite import RealMechanisms; print(RealMechanisms().rollback('INC-1234'))"
+# Run automated verification suite across all 13 scenarios
+python -m scenarios verify
 ```
 
 ---
 
-## Verifying the foundation
+## 🌐 API & GraphQL Query Reference
 
-These need no Docker, no DataHub and no API key — run them first when something
-looks wrong, to tell "the agent is broken" apart from "the environment is":
+The unified backend exposes a GraphQL API at `http://localhost:8000/graphql` and interactive endpoints:
 
-```bash
-pytest tests/ -q                        # the offline suite
-python -m agent --fake                  # full loop on canned data
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/graphql` | `POST` | Primary GraphQL query & mutation endpoint for dashboard telemetry |
+| `/actions/drill/{scenario}/stream` | `GET` | SSE stream for live agentic self-healing fire drills |
+| `/webhook/github` | `POST` | GitHub push & pull request webhook trigger |
+| `/webhook/dbt` | `POST` | dbt Cloud assertion failure alert listener |
+| `/webhook/advisory` | `POST` | Vendor API / package breaking-change listener |
+| `/health` | `GET` | Service readiness and dependency health probe |
+
+---
+
+## 📁 Repository Architecture
+
 ```
-
-The suite covers the parts that decide what the agent does before any LLM is
-involved: the anomaly classifier and its boundaries, leak identification, the
-planner's recipe table, the autonomy tiers, journal round-trips and selective
-rollback, snapshot restore verified by content fingerprint, drift maths, the
-savings digest, trust scoring, and the contract-parity checks that catch a new
-signal type or action type being added without a home. It builds its own
-throwaway DuckDB, so running it can never disturb the pipeline you are demoing
-with.
-
-### Checking the agent against its own claims
-
-Every scenario declares what it expects the agent to do — the signal, the change
-type, the root cause, the actions, and whether the pipeline can actually be
-repaired afterwards. The harness runs the real loop and grades each one:
-
-```bash
-python -m scenarios verify --all --plan-only   # detection + RCA + planning, mutates nothing
-python -m scenarios verify --all               # the full loop, resets between each
-python -m scenarios verify stale_feed          # just one
-```
-
-`--plan-only` is the one to run habitually: it covers the reasoning half in a
-fraction of the time and changes nothing. A failed row is either a regression or
-an expectation that was written optimistically — both worth knowing, which is
-why the expectations live next to the scenarios rather than in the README.
-
-With the warehouse built, these exercise the pieces the remediation loop is built
-on. The last one is the important one — it proves a poisoned pipeline can be
-restored exactly:
-
-```bash
-# the validation gate: which assertions pass, by name
-python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; r=D().test(); print(r.ok, len(r.passed), r.failed)"
-
-# the model registry: current champion, and what a rollback would target
-python -c "from agent.tools.warehouse.champion import ChampionMetrics as C; c=C(); v=c.current(); print(v.version, v.roc_auc, v.validated); print('rollback ->', c.last_good(exclude_version=v.version))"
-
-# the Time Machine: break it, restore it, prove the restore was exact
-python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; s=S(); print('before', s.fingerprint('raw_transactions'))"
-python -m scenarios unit_bug --no-reingest
-python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; s=S(); s.restore('raw_transactions','last_good'); print('after ', s.fingerprint('raw_transactions'))"
-python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; d=D(); d.run(quiet=True); print(d.test().ok)"
-```
-
-The two fingerprints must match, and the final line must print `True`.
-
-## Proving the mitigations are real
-
-The point of the loop is that it changes things and can change them back. This
-sequence proves both, and is the honest test of whether the agent works:
-
-```bash
-python -m scenarios reset                 # clean, and capture last-good
-python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print('poison-free:', S().fingerprint('raw_transactions'))"
-
-python -m scenarios unit_bug              # break it
-python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print('poisoned  :', S().fingerprint('raw_transactions'))"
-
-python -m agent                           # detect -> RCA -> quarantine + pin + tag -> validate
-cat .sentinel/journal.jsonl                # every action, with its inverse
-
-# now undo everything the agent did, and confirm the break comes back
-python -c "from agent.tools.mechanisms.composite import RealMechanisms as R; from agent.journal import ActionJournal as J; inc=J().entries()[0].incident_id; print(R().rollback(inc))"
-python -c "from agent.tools.warehouse.snapshots import SnapshotStore as S; print('rolled back:', S().fingerprint('raw_transactions'))"
-python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; d=D(); d.run(quiet=True); print('assertions:', d.test().ok)"
-```
-
-The `rolled back` fingerprint must equal the `poisoned` one, and the assertions
-must print `False` — the pipeline is broken again, which is what proves the fix
-had been real rather than reported.
-
-And that a *silent* failure is caught with dbt fully green, then contained rather
-than falsely resolved:
-
-```bash
-python -m scenarios reset
-python -m scenarios stale_feed
-python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('dbt green:', D().test().ok)"   # True
-python -m agent                                        # must say CONTAINED
-python -m ml.score                                     # must refuse: breaker open
-python -m scenarios reset
-```
-
-The whole loop in one command, repeatable any time:
-
-```bash
-python -m agent drill unit_bug        # inject -> detect -> RCA -> fix -> verify
-python -m agent digest                # what it just did, in hours
-python -m scenarios reset
-```
-
-Shadow mode must change nothing — check that it doesn't:
-
-```bash
-python -m scenarios null_spike
-python -m agent --shadow
-python -c "from agent.tools.warehouse.dbt_runner import DbtRunner as D; print('still broken:', not D().test().ok)"
-ls .sentinel/breakers/ 2>/dev/null || echo "no breakers opened - correct"
-python -m scenarios reset
-```
-
-Check the circuit breaker independently:
-
-```bash
-python -m scenarios training_regression && python -m agent    # champion v2 -> v1
-python -c "from agent.tools.warehouse.champion import ChampionMetrics as C; v=C().current(); print('champion v'+v.version, v.roc_auc)"
-python -m ml.score                        # runs; add a breaker and it refuses
+omnisre/
+├── agent/                     # Autonomous Core Engine
+│   ├── orchestrator.py        # 9-stage self-healing closed loop
+│   ├── rca.py                 # LLM-assisted root cause analysis engine
+│   ├── planner.py             # Remediation planner & action synthesizer
+│   ├── policy.py              # 3-Tier autonomy policy gating
+│   ├── journal.py             # Reversible action execution & rollback journal
+│   ├── integrations/          # Slack (Socket Mode) & PagerDuty adapters
+│   └── tools/                 # DataHub graph probes, detectors, and actuators
+├── api/                       # FastAPI & GraphQL Webhook Server
+│   ├── repo_onboarding.py     # AST scanner & DataHub MCP lineage engine
+│   ├── server.py              # GraphQL schema & route definitions
+│   └── actions.py             # Synchronous & SSE drill execution runners
+├── config/                    # Declarative YAML configurations
+│   ├── slack.yaml             # Channel routing & approval policies
+│   ├── pagerduty.yaml         # PagerDuty tier mapping & severity rules
+│   └── cost_model.yaml        # Downtime exposure & financial models
+├── pipeline/                  # dbt & DuckDB fraud detection warehouse
+├── ml/                        # MLflow model training, scoring, & drift engine
+├── scenarios/                 # 13 Production Chaos Engineering scenarios
+└── web/                       # Next.js 16 (Turbopack) Web Console
+    ├── app/                   # App Router pages (Incidents, Pipeline, Assets, Chat)
+    └── components/            # Agentic terminal, Chaos modal, Lineage viewer
 ```
 
 ---
 
-## Reset / teardown
+## 🏆 Hackathon Video Demo
 
-```bash
-python -m scenarios reset   # restore a clean, healthy pipeline
-```
+A full 3-minute video presentation and voiceover script is available in [VOICEOVER_DEMO_SCRIPT.md](file:///c:/Users/Srinjoy/OneDrive/Desktop/DataHub/VOICEOVER_DEMO_SCRIPT.md).
 
-`reset` asks every scenario to clean up after itself (clearing advisories,
-re-pointing the MLflow `champion` alias at the newest validated version), then
-re-seeds, rebuilds, re-runs the assertions, re-captures the last-good snapshot,
-and refreshes DataHub. Add `--no-reingest` to skip the DataHub refresh for faster
-local iteration.
+---
 
-```bash
-datahub docker nuke         # remove all DataHub containers + volumes
-datahub docker quickstart   # fresh start (then re-run setup steps 4–6)
-```
+## 📜 License
 
-## License
-
-Apache 2.0 — see [LICENSE](LICENSE).
+Licensed under the [Apache-2.0 License](LICENSE).

@@ -130,7 +130,7 @@ export default function OnboardRepoModal({ open, onClose, onSuccess }: OnboardRe
             </div>
 
             <div className="rounded-lg border border-accent/30 bg-accent-soft/20 p-3.5 text-xs text-muted space-y-1">
-              <p className="font-medium text-foreground">What Sentinel does automatically:</p>
+              <p className="font-medium text-foreground">What OmniSRE does automatically:</p>
               <ul className="list-disc list-inside space-y-0.5 text-[11px]">
                 <li>Scans Python AST for ML models (<code className="text-accent">sklearn</code>, <code className="text-accent">torch</code>, <code className="text-accent">xgboost</code>) & data sources.</li>
                 <li>Emits Dataset, DataJob, and MLModel lineage directly to DataHub without manual YAML recipes.</li>

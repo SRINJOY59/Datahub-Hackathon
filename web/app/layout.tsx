@@ -15,8 +15,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Sentinel — incident console",
-  description: "Autonomous data & ML incident response — live dashboard.",
+  title: "OmniSRE — Autonomous Data & ML Reliability Console",
+  description: "OmniSRE — Multi-Repo Self-Healing Data & ML Governance Platform on DataHub.",
 };
 
 export default function RootLayout({

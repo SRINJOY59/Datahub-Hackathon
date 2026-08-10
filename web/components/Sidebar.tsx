@@ -36,9 +36,12 @@ export default function Sidebar({ onOpenConnectModal }: { onOpenConnectModal?: (
           <span className="pulse-live absolute inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
         </span>
         <div>
-          <p className="text-sm font-semibold leading-none tracking-tight">Sentinel</p>
+          <p className="text-sm font-bold leading-none tracking-tight text-foreground flex items-center gap-1.5">
+            <span>OmniSRE</span>
+            <span className="rounded bg-accent-soft px-1.5 py-0.2 text-[9px] font-mono text-accent border border-accent/30">AI</span>
+          </p>
           <p className="mt-1 text-[10px] leading-none text-muted-dim">
-            autonomous incident response
+            multi-repo data & ml sre
           </p>
         </div>
       </div>

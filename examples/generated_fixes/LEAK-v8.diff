@@ -1,0 +1,10 @@
+--- a/ml/config.py
++++ b/ml/config.py
+@@ -20,7 +20,6 @@
+ 
+ # Feature columns (order matters — score.py must match).
+ FEATURES = [
+-    "amount",
+     "avg_txn_amount",
+     "user_txn_count",
+     "stddev_txn_amount",
