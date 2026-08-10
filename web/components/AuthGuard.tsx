@@ -4,7 +4,8 @@ import React, { useEffect } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 
-const PUBLIC_PATHS = ["/login", "/signup"];
+const PUBLIC_PATHS = ["/", "/login", "/signup"];
+const AUTH_FLOW_PATHS = ["/login", "/signup"];
 
 export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth();
@@ -12,16 +13,17 @@ export default function AuthGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
 
   const isPublicPath = PUBLIC_PATHS.includes(pathname);
+  const isAuthFlow = AUTH_FLOW_PATHS.includes(pathname);
 
   useEffect(() => {
     if (loading) return;
 
     if (!user && !isPublicPath) {
       router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
-    } else if (user && isPublicPath) {
-      router.replace("/");
+    } else if (user && isAuthFlow) {
+      router.replace("/overview");
     }
-  }, [user, loading, pathname, isPublicPath, router]);
+  }, [user, loading, pathname, isPublicPath, isAuthFlow, router]);
 
   // While checking auth status on protected pages, show a sleek loader
   if (loading && !isPublicPath) {
