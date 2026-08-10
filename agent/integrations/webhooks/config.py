@@ -30,6 +30,7 @@ class WebhookConfig:
     server: ServerConfig = field(default_factory=ServerConfig)
     sources: dict[str, SourceConfig] = field(default_factory=dict)
     sweep_interval_minutes: int = 0
+    auto_remediate: bool = True
 
     @classmethod
     def load(cls) -> WebhookConfig:
@@ -59,13 +60,16 @@ class WebhookConfig:
 
         schedule = raw.get("schedule", {})
         sweep = schedule.get("sweep_interval_minutes", 0) if isinstance(schedule, dict) else 0
+        auto_remediate = schedule.get("auto_remediate", True) if isinstance(schedule, dict) else True
 
         return cls(
             enabled=raw.get("enabled", False),
             server=server,
             sources=sources,
             sweep_interval_minutes=sweep,
+            auto_remediate=auto_remediate,
         )
+
 
     def secret_for(self, source: str) -> str | None:
         return os.environ.get(f"WEBHOOK_SECRET_{source.upper()}")

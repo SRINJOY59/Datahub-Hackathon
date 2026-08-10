@@ -9,22 +9,19 @@ is down, and heavyweight computations are cached behind a short TTL.
 from __future__ import annotations
 
 import json
-import os
-import time
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-ADVISORIES_DIR = REPO_ROOT / ".sentinel" / "advisories"
-FIXES_DIR = REPO_ROOT / "examples" / "generated_fixes"
+from api.shared import (
+    ADVISORIES_DIR,
+    FIXES_DIR,
+    REPO_ROOT,
+    TTLCache,
+    gms_url,
+    installed_version,
+)
 
-_DEP_TTL_SECONDS = 30.0
-_dep_cache: tuple[float, list[dict]] | None = None
-
-
-def _gms() -> str:
-    return os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
+_dep_cache: TTLCache[list[dict]] = TTLCache(ttl_seconds=30.0)
 
 
 # --------------------------------------------------------------------------- #
@@ -32,21 +29,21 @@ def _gms() -> str:
 # --------------------------------------------------------------------------- #
 def list_dependencies(force: bool = False) -> list[dict]:
     """Every top-level package imported in the codebase, with version info."""
-    global _dep_cache
-    now = time.monotonic()
-    if not force and _dep_cache and (now - _dep_cache[0]) < _DEP_TTL_SECONDS:
-        return _dep_cache[1]
+    if not force:
+        cached = _dep_cache.get()
+        if cached is not None:
+            return cached
 
     try:
         from memory.codebase import shared_codebase
         cb = shared_codebase()
         packages = sorted(cb.all_packages())
     except Exception:
-        return _dep_cache[1] if _dep_cache else []
+        return _dep_cache.get() or []
 
     rows: list[dict] = []
     for pkg in packages:
-        version = _installed_version(pkg)
+        version = installed_version(pkg)
         files = cb.files_importing(pkg)
         assets = cb.impacted_assets(pkg)
         has_advisory = _has_active_advisory(pkg)
@@ -62,19 +59,11 @@ def list_dependencies(force: bool = False) -> list[dict]:
 
     # Sort: at_risk first, then by file count descending
     rows.sort(key=lambda r: (0 if r["status"] == "at_risk" else 1, -r["files_using"]))
-    _dep_cache = (now, rows)
+    _dep_cache.set(rows)
     return rows
 
 
-def _installed_version(package: str) -> str | None:
-    try:
-        from importlib.metadata import version, PackageNotFoundError
-        try:
-            return version(package)
-        except PackageNotFoundError:
-            return None
-    except Exception:
-        return None
+# _installed_version removed — use api.shared.installed_version() instead.
 
 
 def _has_active_advisory(package: str) -> bool:
@@ -218,7 +207,7 @@ def dependency_blast_radius(package: str) -> dict:
     try:
         from agent.tools.graph.context import read_context
         for urn in direct_assets:
-            ctx = read_context(urn, _gms())
+            ctx = read_context(urn, gms_url())
             for node in ctx.downstream:
                 downstream.append({
                     "urn": node.urn,
@@ -334,16 +323,46 @@ def ingest_advisory(payload: dict) -> dict:
     path = ADVISORIES_DIR / f"{adv_id}.json"
     path.write_text(json.dumps(adv, indent=2), encoding="utf-8")
 
+    # Invalidate cache so UI sees the new advisory immediately
+    _dep_cache.invalidate()
+
+    # Event-driven dispatch: trigger agent run queue if server is active
+    run_status = None
+    try:
+        from agent.integrations.webhooks import server as webhook_server
+        from agent.integrations.webhooks.router import AgentRunRequest
+
+        if webhook_server._queue and webhook_server._run_fn:
+            from memory.codebase import shared_codebase
+            cb = shared_codebase()
+            impacted = cb.impacted_assets(payload["package"])
+            asset_urn = impacted[0] if impacted else "__advisory__"
+
+            req = AgentRunRequest(
+                asset_urn=asset_urn,
+                source="advisory",
+                signal_hint="dependency_change",
+                metadata=adv,
+            )
+            st = webhook_server._queue.submit(req, webhook_server._run_fn)
+            run_status = {"run_id": st.run_id, "status": st.status, "asset_urn": st.asset_urn}
+    except Exception:
+        pass
+
     try:
         rel_path = str(path.relative_to(REPO_ROOT))
     except ValueError:
         rel_path = str(path)
 
-    return {
+    res = {
         "accepted": True,
         "advisory_id": adv_id,
         "path": rel_path,
     }
+    if run_status:
+        res["triggered_run"] = run_status
+    return res
+
 
 
 # --------------------------------------------------------------------------- #

@@ -19,11 +19,9 @@ import re
 import urllib.request
 import urllib.error
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Optional
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-ADVISORIES_DIR = REPO_ROOT / ".sentinel" / "advisories"
+from api.shared import ADVISORIES_DIR, REPO_ROOT, installed_version
 
 # Fallback / known breaking change signatures for offline demo resilience
 _KNOWN_CHANGELOGS: dict[str, dict[str, Any]] = {
@@ -105,7 +103,7 @@ class RegistryMonitor:
 
         for pkg in target_pkgs:
             checked_count += 1
-            installed_v = self._get_installed_version(pkg)
+            installed_v = installed_version(pkg)
             live_data = self.check_pypi_package(pkg)
 
             if live_data:
@@ -151,16 +149,6 @@ class RegistryMonitor:
             "network_online": network_available,
             "generated": generated_list,
         }
-
-    def _get_installed_version(self, package: str) -> Optional[str]:
-        try:
-            from importlib.metadata import version, PackageNotFoundError
-            try:
-                return version(package)
-            except PackageNotFoundError:
-                return None
-        except Exception:
-            return None
 
     def _is_breaking_bump(self, v_current: str, v_latest: str) -> bool:
         """Check if difference represents a major version jump (SemVer breaking)."""

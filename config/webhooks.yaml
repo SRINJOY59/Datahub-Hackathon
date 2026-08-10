@@ -1,39 +1,48 @@
-# Webhook triggers — event-driven agent runs.
+# Sentinel Webhook & Registry Monitor Configuration
+# ==============================================================================
 #
-# Each source can map external identifiers (job names, DAG IDs) to DataHub
-# asset URNs. The server verifies HMAC-SHA256 signatures using per-source
-# secrets from .env (WEBHOOK_SECRET_DBT, WEBHOOK_SECRET_GITHUB, etc.).
+# 1. PUSH WEBHOOKS (Event-Driven / 0s Latency)
+#    External systems (GitHub, Airflow, dbt Cloud, Stripe) push HTTP POST events.
+#
+# 2. PULL REGISTRY SWEEP (Scheduled / APScheduler)
+#    Monitors upstream package registries (PyPI, npm) for breaking updates (Dependabot pattern).
+# ==============================================================================
 
 enabled: true
 
 server:
   host: "0.0.0.0"
   port: 8090
-  workers: 2    # max concurrent agent runs
+  workers: 2
 
+# --- 1. Push Webhook Event Sources ---
 sources:
-  dbt:
+  github:
     enabled: true
-    # dbt Cloud webhook → DataHub asset mapping.
-    # Key: dbt job name. Value: DataHub asset URN.
-    job_to_asset:
-      "daily_feature_pipeline": "urn:li:dataset:(urn:li:dataPlatform:snowflake,prod.features.user_signals,PROD)"
+    # GitHub push events & release.published webhooks.
 
   airflow:
     enabled: true
-    # Airflow task failure callback → DataHub asset mapping.
+    # Airflow DAG/task failure callbacks.
     dag_to_asset:
       "train_churn_model": "urn:li:mlModel:(urn:li:dataPlatform:mlflow,churn_model_v2,PROD)"
 
-  github:
+  dbt:
     enabled: true
-    # No explicit mapping — uses GitCommitDetector to find affected assets.
+    # dbt Cloud assertion failure webhooks.
+    job_to_asset:
+      "daily_feature_pipeline": "urn:li:dataset:(urn:li:dataPlatform:snowflake,prod.features.user_signals,PROD)"
+
+  advisory:
+    enabled: true
+    # Vendor SaaS API breaking-change webhooks (e.g. Stripe, Twilio, OpenAI).
 
   generic:
     enabled: true
-    # Caller provides asset_urn directly in the POST body.
+    # Direct incident push.
 
+# --- 2. Upstream Registry Sweep Schedule (PyPI / npm) ---
 schedule:
-  # Periodic full sweep — catches problems no webhook fires for (e.g. a job
-  # that silently stops running). Set to 0 to disable.
-  sweep_interval_minutes: 30
+  # Interval in minutes for APScheduler to scan PyPI for breaking updates across codebase dependencies.
+  sweep_interval_minutes: 60
+  auto_remediate: true

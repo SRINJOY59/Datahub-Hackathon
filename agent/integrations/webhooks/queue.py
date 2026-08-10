@@ -10,6 +10,8 @@ from typing import Optional
 
 from agent.integrations.webhooks.router import AgentRunRequest
 
+_MAX_HISTORY = 100  # Cap completed runs to prevent unbounded memory growth.
+
 
 @dataclass
 class RunStatus:
@@ -70,6 +72,9 @@ class RunQueue:
             with self._lock:
                 self._active[run_id].finished_at = datetime.now(timezone.utc)
                 self._history.append(self._active.pop(run_id))
+                # Trim oldest entries so memory doesn't grow unboundedly.
+                if len(self._history) > _MAX_HISTORY:
+                    self._history = self._history[-_MAX_HISTORY:]
 
     def active_runs(self) -> list[RunStatus]:
         with self._lock:

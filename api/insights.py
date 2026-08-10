@@ -13,16 +13,11 @@ dicts for the resolvers. Two rules shape it:
 """
 from __future__ import annotations
 
-import os
-import time
 from typing import Any, Optional
 
-_TRUST_TTL_SECONDS = 60.0
-_trust_cache: tuple[float, list[dict]] | None = None
+from api.shared import TTLCache, gms_url
 
-
-def _gms() -> str:
-    return os.environ.get("DATAHUB_GMS_URL", "http://localhost:8080")
+_trust_cache: TTLCache[list[dict]] = TTLCache(ttl_seconds=60.0)
 
 
 def savings_digest() -> dict:
@@ -72,10 +67,10 @@ def journal_entries(limit: int = 100) -> list[dict]:
 def trust_badges(force: bool = False) -> list[dict]:
     """Live trust score per dbt dataset. Never publishes — this is the
     read-only view of what `python -m agent badges` would write."""
-    global _trust_cache
-    now = time.monotonic()
-    if not force and _trust_cache and (now - _trust_cache[0]) < _TRUST_TTL_SECONDS:
-        return _trust_cache[1]
+    if not force:
+        cached = _trust_cache.get()
+        if cached is not None:
+            return cached
 
     try:
         from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
@@ -83,12 +78,13 @@ def trust_badges(force: bool = False) -> list[dict]:
         from agent.tools.graph.trust import TrustScorer
         from agent.tools.graph.urns import short_name
 
-        graph = DataHubGraph(DataHubGraphConfig(server=_gms()))
-        scorer = TrustScorer(gms_server=_gms())
+        gms = gms_url()
+        graph = DataHubGraph(DataHubGraphConfig(server=gms))
+        scorer = TrustScorer(gms_server=gms)
         urns = sorted(graph.get_urns_by_filter(entity_types=["dataset"],
                                                platform="dbt"))
     except Exception:
-        return _trust_cache[1] if _trust_cache else []
+        return _trust_cache.get() or []
 
     rows: list[dict] = []
     for urn in urns:
@@ -108,7 +104,7 @@ def trust_badges(force: bool = False) -> list[dict]:
             "past_incidents": int(s.inputs.get("past_incidents", 0) or 0),
         })
     rows.sort(key=lambda r: r["score"])
-    _trust_cache = (now, rows)
+    _trust_cache.set(rows)
     return rows
 
 
@@ -126,7 +122,7 @@ def registered_runbooks() -> list[dict]:
 
         from agent.knowledge.runbook import MIN_INCIDENTS, skill_urn
 
-        graph = DataHubGraph(DataHubGraphConfig(server=_gms()))
+        graph = DataHubGraph(DataHubGraphConfig(server=gms_url()))
     except Exception:
         return []
 

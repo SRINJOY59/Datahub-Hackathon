@@ -257,6 +257,18 @@ class RegistrySyncResult:
 
 
 @strawberry.type
+class SweepStatus:
+    """Observable state of the periodic background sweep."""
+    interval_minutes: int
+    is_running: bool
+    last_run_at: Optional[str]
+    next_run_at: Optional[str]
+    last_error: Optional[str]
+    total_runs: int
+    total_errors: int
+
+
+@strawberry.type
 class SystemStatus:
     """What is actually alive, for the dashboard's health panel — not
     aspirational config, observed state (or, for integrations, whether a
@@ -273,3 +285,4 @@ class SystemStatus:
     llm_model: str
     webhook_sources_enabled: list[str]
     sweep_interval_minutes: int
+    sweep_status: Optional[SweepStatus] = None

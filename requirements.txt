@@ -31,6 +31,7 @@ slack-sdk>=3.27,<4
 # --- Webhook server (event-driven agent runs: python -m agent serve) ---
 fastapi>=0.110,<1
 uvicorn[standard]>=0.29,<1
+apscheduler>=3.10,<4  # periodic sweep scheduler (replaces raw time.sleep loop)
 
 # --- Dashboard read API (GraphQL over the incident store: python -m api) ---
 strawberry-graphql[fastapi]>=0.235,<1

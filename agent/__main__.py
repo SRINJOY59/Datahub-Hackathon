@@ -9,6 +9,7 @@
     python -m agent notify          write role-tailored comms for open incidents
     python -m agent drill <name>    fire drill: break it on purpose, then heal it
     python -m agent serve           start the webhook server (event-driven mode)
+    python -m agent sync            scan upstream PyPI/registries for breaking package releases
     python -m agent incidents       list incidents from the local store, with stats
 
 Run a scenario first (`python -m scenarios <name>`) to give the loop something to
@@ -51,6 +52,8 @@ def main() -> None:
         return _runbooks(llm)
     if args.command == "serve":
         return _serve(llm)
+    if args.command in ("sync", "sync-registry"):
+        return _sync_registries()
 
     agent, mechanisms = _build_agent(args, llm)
 
@@ -72,7 +75,7 @@ def _parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(prog="agent")
     ap.add_argument("command", nargs="?", default="run",
                     choices=["run", "digest", "badges", "runbooks", "notify", "drill",
-                             "serve", "incidents"],
+                             "serve", "sync", "sync-registry", "incidents"],
                     help="what to do (default: run the loop)")
     ap.add_argument("scenario", nargs="?", help="scenario name, for `drill`")
     ap.add_argument("--fake", action="store_true", help="use canned mechanisms")
@@ -222,13 +225,35 @@ def _notify(agent: SentinelAgent) -> None:
             notifier.announce(inc, ctx, rca, cost)
 
 
+def _sync_registries() -> None:
+    """Scan upstream package registries (PyPI) for breaking upgrades across dependencies."""
+    from agent.tools.detectors.registry_monitor import shared_registry_monitor
+
+    print("\nScanning codebase dependencies against upstream PyPI registry...")
+    monitor = shared_registry_monitor()
+    result = monitor.scan_and_sync()
+
+    print(f"  Packages checked: {result['packages_checked']}")
+    print(f"  Network online  : {'Yes (live PyPI API)' if result['network_online'] else 'Offline (registry cache)'}")
+    print(f"  New advisories  : {result['advisories_generated']}")
+
+    if result.get("generated"):
+        print("\nGenerated advisories:")
+        for g in result["generated"]:
+            print(f"  - {g['package']:20s} -> {g['path']} ({g['source']})")
+    else:
+        print("\nAll watched dependencies are up-to-date and healthy.")
+
+
 def _serve(llm) -> None:
     """Start the webhook server — event-driven agent runs."""
     import uvicorn
 
+
     from agent.integrations.webhooks.config import WebhookConfig
     from agent.integrations.webhooks.router import AgentRunRequest
-    from agent.integrations.webhooks.server import app, configure
+    from agent.integrations.webhooks.server import app, attach_sweep, configure
+    from agent.integrations.webhooks.sweep import SweepScheduler
 
     cfg = WebhookConfig.load()
     if not cfg.enabled:
@@ -265,44 +290,55 @@ def _serve(llm) -> None:
 
     configure(cfg, run_agent)
 
+    # --- APScheduler-backed Registry Sweep -------------------------------- #
+    def _perform_registry_sweep() -> None:
+        from agent.tools.detectors.registry_monitor import shared_registry_monitor
+
+        print("\n  [sweep    ] scheduled PyPI/npm registry scan starting...")
+        monitor = shared_registry_monitor()
+        result = monitor.scan_and_sync()
+        generated = result.get("advisories_generated", 0)
+        print(f"  [sweep    ] checked {result.get('packages_checked', 0)} packages — {generated} new advisory(ies)")
+
+        if generated > 0 and cfg.auto_remediate:
+            print("  [sweep    ] running agent remediation loop on new package advisories...")
+            agent.run()
+
+    sweep_minutes = cfg.sweep_interval_minutes
+    sweep_scheduler = SweepScheduler()
+    attach_sweep(sweep_scheduler)
+
+    if sweep_minutes > 0:
+        sweep_scheduler.start(interval_minutes=sweep_minutes, run_fn=_perform_registry_sweep)
+
     from api.server import attach as attach_graphql
 
     attach_graphql(app)
 
-    sweep_minutes = cfg.sweep_interval_minutes
-    if sweep_minutes > 0:
-        import threading
-
-        def _sweep_loop():
-            import time
-            while True:
-                time.sleep(sweep_minutes * 60)
-                print(f"\n  [sweep    ] periodic sweep ({sweep_minutes}m interval)")
-                try:
-                    agent.run()
-                except Exception as exc:
-                    print(f"  [sweep    ] error: {exc}")
-
-        t = threading.Thread(target=_sweep_loop, daemon=True)
-        t.start()
-
     enabled_sources = [s for s, sc in cfg.sources.items() if sc.enabled]
     print(f"\nWebhook server starting on http://{cfg.server.host}:{cfg.server.port}")
-    print(f"  Sources: {', '.join(enabled_sources)}")
-    print(f"  Workers: {cfg.server.workers}")
+    print(f"  Push Webhooks     : {', '.join(enabled_sources)}")
+    print(f"  Workers           : {cfg.server.workers}")
     if sweep_minutes > 0:
-        print(f"  Sweep: every {sweep_minutes}m")
+        print(f"  Registry Sweep    : every {sweep_minutes}m on PyPI/npm (APScheduler, ±10% jitter)")
     else:
-        print(f"  Sweep: disabled")
+        print(f"  Registry Sweep    : disabled (on-demand via CLI / UI)")
     print(f"\nEndpoints:")
     for source in enabled_sources:
         print(f"  POST /webhook/{source}")
+
     print(f"  GET  /health")
     print(f"  GET  /runs")
+    print(f"  GET  /sweep/status")
+    print(f"  POST /sweep/trigger")
     print(f"  POST /graphql   (dashboard reads — GraphiQL at this path in a browser)\n")
 
-    uvicorn.run(app, host=cfg.server.host, port=cfg.server.port,
-                log_level="info")
+    try:
+        uvicorn.run(app, host=cfg.server.host, port=cfg.server.port,
+                    log_level="info")
+    finally:
+        sweep_scheduler.stop()
+
 
 
 def _drill(agent: SentinelAgent, mechanisms, scenario: str | None) -> None:

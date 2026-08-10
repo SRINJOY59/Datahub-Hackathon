@@ -1,22 +1,46 @@
-# Self-Maintaining APIs — Hackathon Demo Guide
+# Self-Maintaining APIs — Production Architecture & Demo Guide
 
-Here are **4 production-grade demo scenarios** designed to give hackathon judges a realistic experience of **Self-Maintaining APIs**:
+Sentinel implements **Self-Maintaining APIs** using a dual architecture:
+1. **Push-Based Webhooks**: For Vendor SaaS APIs (Stripe, Twilio), GitHub Releases, and Data Pipeline orchestrators (dbt, Airflow).
+2. **Upstream Registry Monitoring**: For open-source package registries (PyPI, npm) using automated SemVer analysis (Dependabot/Renovate pattern).
 
 ---
+
+## Architecture Overview
+
+```
+                      ┌────────────────────────────────────────┐
+                      │            SENTINEL AGENT              │
+                      └──────────────────┬─────────────────────┘
+                                         │
+        ┌────────────────────────────────┴────────────────────────────────┐
+        ▼                                                                 ▼
+ 📡 TRUE WEBHOOKS (Push / Event-Driven)                ⏰ REGISTRY MONITOR (Poll / Scheduled)
+ ──────────────────────────────────────                ───────────────────────────────────────
+ • POST /webhook/github (GitHub Releases / PRs)        • Queries PyPI JSON API for packages
+ • POST /webhook/advisory (Stripe, Twilio SaaS APIs)   • Compares installed vs. latest SemVer
+ • POST /webhook/dbt (dbt Cloud run failures)          • Generates breaking-change advisories
+ • POST /webhook/airflow (DAG failure alerts)          • Triggered via CLI (python -m agent sync)
+                                                         or REST (/api/v1/advisories/sync-registry)
+```
+
+---
+
+## 5 Production Demo Scenarios
 
 ### Scenario 1: The ML Champion Model API Break (`scikit-learn 2.0`)
 > **The Story:** A vendor releases a breaking change in an ML library that our fraud-detection training pipeline imports.
 
-#### How the Judges Test It:
+#### How to Test:
 ```bash
 # 1. Inject the breaking change advisory
-python -m scenarios api_breaking_change
+.\.venv\Scripts\python.exe -m scenarios api_breaking_change
 
 # 2. Run the autonomous Sentinel agent
-python -m agent
+.\.venv\Scripts\python.exe -m agent
 ```
 
-#### What Judges See:
+#### What Happens:
 1. **Terminal**: Sentinel catches `DEP-scikit-l`, maps call-sites in `ml/train.py`, traces the DataHub blast radius to `fraud_detection_model_1` $\to$ `fraud_scoring_api`, and generates a validated diff.
 2. **Dashboard (`http://localhost:3000/api-health`)**:
    - **Active Advisories Tab**: Shows scikit-learn advisory with highlighted call-site `ml/train.py:42`.
@@ -25,10 +49,10 @@ python -m agent
 
 ---
 
-### Scenario 2: Live Payment Gateway SDK Migration (`stripe v10.0`)
-> **The Story:** Stripe sends a live webhook announcing that `stripe.Charge.create()` is deprecated in favor of `stripe.PaymentIntent.create()`.
+### Scenario 2: Live Vendor Webhook Ingestion (`stripe v10.0`)
+> **The Story:** Stripe sends a live developer webhook announcing that `stripe.Charge.create()` is deprecated in favor of `stripe.PaymentIntent.create()`.
 
-#### How the Judges Test It (Live from the UI):
+#### How to Test (Live from the UI):
 1. Navigate to **`http://localhost:3000/api-health`**.
 2. Click **"Ingest Vendor Webhook"** in the top right.
 3. Fill in the modal (or use the REST endpoint via `curl`):
@@ -43,47 +67,55 @@ python -m agent
    }
    ```
 4. Click **"POST Webhook Advisory"**.
-5. Click **"SRE Scan Now"**.
-
-#### What Judges See:
-- The package `stripe` immediately transitions from `Healthy` to `At Risk` in the Dependency Inventory.
-- Sentinel registers the advisory, flags the ingestion call-sites, and prepares the migration PR.
+5. Sentinel immediately ingests the webhook, flags the ingestion call-sites, and prepares the migration PR.
 
 ---
 
-### Scenario 3: Multi-File Framework Refactor (`pydantic v2`)
-> **The Story:** Pydantic deprecates `.dict()` across multiple API routes and schemas in favor of `.model_dump()`.
+### Scenario 3: GitHub Release Webhook (`POST /webhook/github`)
+> **The Story:** Upstream open-source library releases a new version on GitHub, triggering an automatic release webhook to Sentinel.
 
-#### How the Judges Test It (Multi-File CodeFix Demo):
-Run this `curl` command to post the advisory:
+#### How to Test:
 ```bash
-curl -X POST http://localhost:8090/api/v1/advisory \
+curl -X POST http://localhost:8090/webhook/github \
   -H "Content-Type: application/json" \
   -d '{
-    "package": "pydantic",
-    "from_version": "1.10.0",
-    "to_version": "2.0.0",
-    "summary": "BaseModel.dict() deprecated in favor of BaseModel.model_dump()",
-    "migration": "Replace .dict() method calls with .model_dump() on all Pydantic model instances",
-    "symbols": ["dict", "BaseModel"]
+    "action": "published",
+    "release": {
+      "tag_name": "v2.0.0",
+      "name": "pydantic 2.0.0",
+      "body": "Breaking: BaseModel.dict() is deprecated in favor of BaseModel.model_dump()."
+    },
+    "repository": {
+      "name": "pydantic"
+    }
   }'
 ```
 
-#### What Judges See:
-- **Multi-File Detection**: Sentinel scans the repository and finds call-sites across `api/advisory_routes.py`, `api/types.py`, and `agent/contracts.py`.
-- **Multi-File PR**: Sentinel runs shadow validation on each file and creates a single unified PR covering all affected files simultaneously.
+---
+
+### Scenario 4: Upstream PyPI Registry Scanner (Dependabot-Style)
+> **The Story:** Sentinel scans the upstream PyPI registry for all imported packages in the codebase, detecting major version jumps and changelog breaking markers.
+
+#### How to Test:
+```bash
+# Run on-demand from CLI
+.\.venv\Scripts\python.exe -m agent sync
+
+# Or from Dashboard UI:
+# Click "Auto-Sync PyPI/GitHub" on http://localhost:3000/api-health
+```
 
 ---
 
-### Scenario 4: Fast Lineage Query via REST API (SRE Tooling)
+### Scenario 5: Fast Lineage Blast Radius Query via REST API
 > **The Story:** An on-call SRE needs to know the exact business blast radius of an API vendor before approving an upgrade.
 
-#### How the Judges Test It:
+#### How to Test:
 ```bash
 curl "http://localhost:8090/api/v1/dependencies/blast-radius?package=scikit-learn"
 ```
 
-#### What Judges Get:
+#### Output:
 ```json
 {
   "package": "scikit-learn",
@@ -99,23 +131,3 @@ curl "http://localhost:8090/api/v1/dependencies/blast-radius?package=scikit-lear
   "total_impacted": 2
 }
 ```
-
----
-
-### Scenario 5: Automated PyPI / GitHub Registry Monitoring
-> **The Story:** Sentinel autonomously monitors upstream PyPI and GitHub releases in the background, auto-detecting major version upgrades without requiring manual webhook payload authoring.
-
-#### How the Judges Test It:
-1. Navigate to **`http://localhost:3000/api-health`**.
-2. Click **"Auto-Sync PyPI/GitHub"** in the top action bar (or call `POST http://localhost:8090/api/v1/advisories/sync-registry`).
-3. Sentinel queries PyPI's live registry, checks installed versions against latest releases, and automatically generates breaking-change advisories.
-4. **Dual-Trigger Architecture & Resilience:** If external registry network is unreachable or rate-limited, Sentinel seamlessly falls back to registry cache, and the **"Ingest Vendor Webhook"** UI button remains fully operational for on-demand simulation.
-
----
-
-### 💡 Quick Tip for Hackathon Presentation
-1. Start on **`/api-health`** to show the healthy inventory of watched packages.
-2. Click **"Auto-Sync PyPI/GitHub"** to demonstrate automatic upstream release tracking.
-3. Use **"Ingest Vendor Webhook"** to simulate an incoming webhook from Stripe or scikit-learn.
-4. Show the live **Lineage Blast Radius DAG** to showcase the DataHub differentiator.
-5. Run **"SRE Scan Now"** to generate the multi-file migration diff and open the GitHub PR.

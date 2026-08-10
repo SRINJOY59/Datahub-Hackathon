@@ -38,6 +38,7 @@ from api.types import (
     Runbook,
     SavingsDigest,
     Stats,
+    SweepStatus,
     SystemStatus,
     TrustBadge,
     WebhookActivity,
@@ -130,6 +131,27 @@ def _webhook_sources_enabled() -> tuple[list[str], int]:
         return [], 0
 
 
+def _get_sweep_status() -> SweepStatus | None:
+    """Read sweep scheduler state — only populated under ``python -m agent serve``."""
+    try:
+        from agent.integrations.webhooks import server as webhook_server
+
+        scheduler = getattr(webhook_server, "_sweep_scheduler", None)
+        if scheduler is None:
+            return None
+        st = scheduler.status
+        return SweepStatus(
+            interval_minutes=st.interval_minutes,
+            is_running=st.is_running,
+            last_run_at=st.last_run_at.isoformat() if st.last_run_at else None,
+            next_run_at=st.next_run_at.isoformat() if st.next_run_at else None,
+            last_error=st.last_error,
+            total_runs=st.total_runs,
+            total_errors=st.total_errors,
+        )
+    except Exception:
+        return None
+
 @strawberry.type
 class Query:
     @strawberry.field
@@ -215,6 +237,7 @@ class Query:
     def system_status(self) -> SystemStatus:
         reachable, version, url = _check_datahub()
         sources, sweep = _webhook_sources_enabled()
+        sweep_st = _get_sweep_status()
         return SystemStatus(
             datahub_reachable=reachable,
             datahub_version=version,
@@ -226,6 +249,7 @@ class Query:
             llm_model=os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
             webhook_sources_enabled=sources,
             sweep_interval_minutes=sweep,
+            sweep_status=sweep_st,
         )
 
     # --- Self-Maintaining APIs & Dependency Health ------------------------- #
@@ -264,7 +288,16 @@ class Query:
     def api_health_stats(self) -> ApiHealthStats:
         return ApiHealthStats(**api_health.api_health_stats())
 
-    @strawberry.field
+
+@strawberry.type
+class Mutation:
+    """Side-effectful operations — scans, syncs, and sweep triggers.
+
+    These were previously on the Query root, which violated the GraphQL
+    convention that queries are idempotent reads.
+    """
+
+    @strawberry.mutation
     def trigger_dependency_scan(self) -> DependencyScanResult:
         res = api_health.trigger_dependency_scan()
         return DependencyScanResult(
@@ -274,7 +307,7 @@ class Query:
             error=res.get("error"),
         )
 
-    @strawberry.field
+    @strawberry.mutation
     def sync_registries(self) -> RegistrySyncResult:
         res = api_health.sync_registries()
         generated = [RegistrySyncItem(**g) for g in res.get("generated", [])]

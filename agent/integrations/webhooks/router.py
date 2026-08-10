@@ -70,6 +70,27 @@ class EventRouter:
         )
 
     def _parse_github(self, payload: dict, _src) -> Optional[AgentRunRequest]:
+        # Case 1: GitHub Release Webhook (action="published", "created", etc.)
+        if "release" in payload:
+            rel = payload.get("release", {})
+            repo = payload.get("repository", {}).get("name", "")
+            tag = rel.get("tag_name", "")
+            body = rel.get("body", "")
+
+            return AgentRunRequest(
+                asset_urn="__github_release__",
+                source="github_release",
+                signal_hint="dependency_change",
+                metadata={
+                    "package": repo,
+                    "tag_name": tag,
+                    "release_name": rel.get("name", tag),
+                    "body": body,
+                    "published_at": rel.get("published_at", ""),
+                },
+            )
+
+        # Case 2: GitHub Push Webhook
         commits = payload.get("commits", [])
         if not commits:
             return None
@@ -94,6 +115,37 @@ class EventRouter:
             },
         )
 
+    def _parse_advisory(self, payload: dict, _src) -> Optional[AgentRunRequest]:
+        package = payload.get("package", "")
+        if not package:
+            return None
+
+        # Resolve impacted asset via codebase memory if available
+        asset_urn = "__advisory__"
+        try:
+            from memory.codebase import shared_codebase
+            cb = shared_codebase()
+            impacted = cb.impacted_assets(package)
+            if impacted:
+                asset_urn = impacted[0]
+        except Exception:
+            pass
+
+        return AgentRunRequest(
+            asset_urn=asset_urn,
+            source="advisory",
+            signal_hint="dependency_change",
+            metadata={
+                "package": package,
+                "from_version": payload.get("from_version", ""),
+                "to_version": payload.get("to_version", ""),
+                "summary": payload.get("summary", ""),
+                "migration": payload.get("migration", ""),
+                "symbols": payload.get("symbols", []),
+            },
+        )
+
+
     def _parse_generic(self, payload: dict, _src) -> Optional[AgentRunRequest]:
         asset_urn = payload.get("asset_urn")
         if not asset_urn:
@@ -105,3 +157,4 @@ class EventRouter:
             signal_hint=payload.get("signal_type"),
             metadata=payload.get("metadata", {}),
         )
+
