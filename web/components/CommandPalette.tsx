@@ -26,7 +26,13 @@ export default function CommandPalette() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setOpen((v) => !v);
+        setOpen((v) => {
+          if (!v) {
+            setQuery("");
+            setCursor(0);
+          }
+          return !v;
+        });
       } else if (e.key === "Escape") {
         setOpen(false);
       }
@@ -39,11 +45,7 @@ export default function CommandPalette() {
     if (open && incidents.length === 0) {
       fetchIncidents({ limit: 50 }).then(setIncidents).catch(() => {});
     }
-    if (open) {
-      setQuery("");
-      setCursor(0);
-    }
-  }, [open]);
+  }, [open, incidents.length]);
 
   const results = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -70,9 +72,7 @@ export default function CommandPalette() {
     return [...pages, ...incs];
   }, [query, incidents]);
 
-  useEffect(() => {
-    if (cursor >= results.length) setCursor(Math.max(0, results.length - 1));
-  }, [results.length, cursor]);
+  const activeIndex = Math.min(cursor, Math.max(0, results.length - 1));
 
   if (!open) return null;
 
@@ -101,8 +101,8 @@ export default function CommandPalette() {
             } else if (e.key === "ArrowUp") {
               e.preventDefault();
               setCursor((c) => Math.max(c - 1, 0));
-            } else if (e.key === "Enter" && results[cursor]) {
-              go(results[cursor].href);
+            } else if (e.key === "Enter" && results[activeIndex]) {
+              go(results[activeIndex].href);
             }
           }}
           placeholder="Jump to a page or incident…"
@@ -118,7 +118,7 @@ export default function CommandPalette() {
                 onMouseEnter={() => setCursor(i)}
                 onClick={() => go(r.href)}
                 className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm ${
-                  i === cursor ? "bg-accent-soft" : ""
+                  i === activeIndex ? "bg-accent-soft" : ""
                 }`}
               >
                 <span className="flex items-center gap-2.5">

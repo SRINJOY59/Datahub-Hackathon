@@ -15,7 +15,7 @@ from __future__ import annotations
 import re
 from typing import Iterator, Optional
 
-from agent.llm import LLMClient
+from agent.llm import LLMClient, TaskType
 from agent.store import shared_chat_store, shared_store
 
 _STOPWORDS = {
@@ -99,7 +99,7 @@ def stream_answer(session_id: str, question: str,
     chat = shared_chat_store()
     chat.add_message(session_id, "user", question)
 
-    llm = llm or LLMClient()
+    llm = llm or LLMClient.for_task(TaskType.CHAT)
     if not llm.available():
         context = format_context(gather_context(question))
         msg = (

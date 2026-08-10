@@ -124,7 +124,7 @@ class FakeMechanisms(Mechanisms):
 
     def propose_fix(self, incident: Incident, context: ContextBundle,
                     root_cause: str) -> str:
-        return "https://github.com/your-org/fraud-pipeline/pull/42"
+        return "(offline mode — no PR generated)"
 
     def write_back(self, post_mortem: PostMortem, resolved: bool = True) -> None:
         state = "resolved" if resolved else "contained"

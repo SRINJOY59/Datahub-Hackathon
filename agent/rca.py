@@ -65,7 +65,7 @@ class RCAEngine:
         memory: Optional[MemoryStore] = None,
         gms_server: str = "http://localhost:8080",
     ) -> None:
-        self.llm = llm
+        self.llm = llm or LLMClient.for_task(TaskType.REASONING)
         self.memory = memory
         # tolerate DataHub being unreachable (e.g. offline --fake smoke test)
         try:

@@ -1,0 +1,23 @@
+--- a/agent/knowledge/runbook.py
++++ b/agent/knowledge/runbook.py
+@@ -1,3 +1,4 @@
++# [Sentinel Auto-Migration (mcp 2.0.0): Review upstream release notes and upgrade mcp call-sites to 2.0.0.]
+ """Turning repeated incidents into a runbook other agents can use.
+ 
+ Every resolved incident leaves a post-mortem on the asset. Individually they are
+
+--- a/agent/tools/actuators/tag_asset.py
++++ b/agent/tools/actuators/tag_asset.py
+@@ -1,3 +1,4 @@
++# [Sentinel Auto-Migration (mcp 2.0.0): Review upstream release notes and upgrade mcp call-sites to 2.0.0.]
+ """Actuator: mark downstream assets as not to be trusted — the circuit breaker.
+ 
+ This is the mitigation that protects people rather than data. Long before the
+
+--- a/agent/tools/graph/context.py
++++ b/agent/tools/graph/context.py
+@@ -1,3 +1,4 @@
++# [Sentinel Auto-Migration (mcp 2.0.0): Review upstream release notes and upgrade mcp call-sites to 2.0.0.]
+ """DataHub-backed context tool — the real read side of the mechanism interface.
+ 
+ Reads lineage, schema, ownership, tags, and failing assertions from the graph,

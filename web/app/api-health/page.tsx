@@ -13,14 +13,16 @@ import {
   fetchBlastRadius,
   triggerDependencyScan,
   syncRegistries,
-  ingestVendorAdvisory,
+  remediateAdvisory,
 } from "@/lib/queries";
+import { API_URL } from "@/lib/graphql";
 import type {
   Advisory,
   ApiHealthStats,
   BlastRadius,
   Dependency,
   Migration,
+  RemediateAdvisoryResult,
 } from "@/lib/types";
 
 const POLL_MS = 15_000;
@@ -38,6 +40,7 @@ export default function ApiHealthPage() {
   const [error, setError] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [syncing, setSyncing] = useState(false);
+  const [remediating, setRemediating] = useState(false);
   const [scanMessage, setScanMessage] = useState<string | null>(null);
 
   // Search & Filters
@@ -52,19 +55,18 @@ export default function ApiHealthPage() {
   // Selected migration for diff viewer modal
   const [selectedMigration, setSelectedMigration] = useState<Migration | null>(null);
 
-  // Ingest Advisory Modal State
-  const [showIngestModal, setShowIngestModal] = useState(false);
-  const [ingestPkg, setIngestPkg] = useState("scikit-learn");
-  const [ingestFrom, setIngestFrom] = useState("1.9.0");
-  const [ingestTo, setIngestTo] = useState("2.0.0");
-  const [ingestSummary, setIngestSummary] = useState(
-    "GradientBoostingClassifier's `n_estimators` renamed to `num_estimators`"
-  );
-  const [ingestMigration, setIngestMigration] = useState(
-    "Rename `n_estimators` keyword argument to `num_estimators`"
-  );
-  const [ingestSymbols, setIngestSymbols] = useState("GradientBoostingClassifier, n_estimators");
-  const [ingestSubmitting, setIngestSubmitting] = useState(false);
+  // Active Remediation Modal State with Multi-File Streaming
+  const [remediationModal, setRemediationModal] = useState<{
+    open: boolean;
+    adv: Advisory;
+    stage: "analyzing" | "synthesizing" | "validating" | "completed" | "error";
+    activeFile: string;
+    files: Record<string, { code: string; diff?: string; done?: boolean }>;
+    error?: string;
+    result?: RemediateAdvisoryResult | null;
+  } | null>(null);
+
+
 
   const loadData = () => {
     Promise.all([
@@ -93,11 +95,20 @@ export default function ApiHealthPage() {
   // Load blast radius whenever selected package changes
   useEffect(() => {
     if (!selectedPkg) return;
-    setLoadingBlast(true);
+    let active = true;
     fetchBlastRadius(selectedPkg)
-      .then((data) => setBlastRadius(data))
-      .catch(() => setBlastRadius(null))
-      .finally(() => setLoadingBlast(false));
+      .then((data) => {
+        if (active) setBlastRadius(data);
+      })
+      .catch(() => {
+        if (active) setBlastRadius(null);
+      })
+      .finally(() => {
+        if (active) setLoadingBlast(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [selectedPkg]);
 
   const handleScanNow = async () => {
@@ -143,30 +154,150 @@ export default function ApiHealthPage() {
     }
   };
 
-  const handlePublishAdvisory = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setIngestSubmitting(true);
+  const handleAutoRemediate = async (adv: Advisory) => {
+    const initialFile = adv.usages[0]?.file || "ml/train.py";
+    setRemediating(true);
+    setRemediationModal({
+      open: true,
+      adv,
+      stage: "analyzing",
+      activeFile: initialFile,
+      files: {
+        [initialFile]: { code: "", done: false },
+      },
+    });
+
     try {
-      await ingestVendorAdvisory({
-        package: ingestPkg.trim(),
-        from_version: ingestFrom.trim(),
-        to_version: ingestTo.trim(),
-        summary: ingestSummary.trim(),
-        migration: ingestMigration.trim(),
-        symbols: ingestSymbols.split(",").map((s) => s.trim()).filter(Boolean),
-        kind: "breaking_change",
-      });
-      setShowIngestModal(false);
-      loadData();
-      setSelectedPkg(ingestPkg.trim());
-      setActiveTab("advisories");
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : "Publish failed";
-      alert(`Could not ingest advisory: ${msg}`);
+      const resStream = await fetch(`${API_URL}/api/v1/advisories/${adv.id}/stream-remediation`);
+      if (!resStream.ok || !resStream.body) {
+        const res = await remediateAdvisory(adv.id);
+        if (!res.success) throw new Error(res.error || "Remediation failed");
+        setRemediationModal((prev) => (prev ? { ...prev, stage: "completed", result: res } : null));
+        setAdvisories((prev) => prev.filter((a) => a.id !== adv.id));
+        setStats((prev) =>
+          prev
+            ? {
+                ...prev,
+                activeAdvisories: Math.max(0, prev.activeAdvisories - 1),
+                resolvedMigrations: prev.resolvedMigrations + 1,
+              }
+            : null
+        );
+        loadData();
+        return;
+      }
+
+      const reader = resStream.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+
+        for (const evt of events) {
+          if (!evt.startsWith("data: ")) continue;
+          const jsonStr = evt.replace("data: ", "").trim();
+          if (!jsonStr) continue;
+
+          try {
+            const data = JSON.parse(jsonStr);
+            if (data.type === "step") {
+              setRemediationModal((prev) => (prev ? { ...prev, stage: data.stage } : null));
+            } else if (data.type === "file_start") {
+              setRemediationModal((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      stage: "synthesizing",
+                      activeFile: data.file,
+                      files: {
+                        ...prev.files,
+                        [data.file]: prev.files[data.file] || { code: "", done: false },
+                      },
+                    }
+                  : null
+              );
+            } else if (data.type === "token") {
+              setRemediationModal((prev) => {
+                if (!prev) return null;
+                const f = data.file || prev.activeFile;
+                const current = prev.files[f] || { code: "", done: false };
+                return {
+                  ...prev,
+                  stage: "synthesizing",
+                  activeFile: f,
+                  files: {
+                    ...prev.files,
+                    [f]: { ...current, code: current.code + data.token },
+                  },
+                };
+              });
+            } else if (data.type === "file_done") {
+              setRemediationModal((prev) => {
+                if (!prev) return null;
+                const f = data.file || prev.activeFile;
+                const current = prev.files[f] || { code: "", done: false };
+                return {
+                  ...prev,
+                  files: {
+                    ...prev.files,
+                    [f]: { ...current, done: true, diff: data.diff },
+                  },
+                };
+              });
+            } else if (data.type === "complete") {
+              setRemediationModal((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      stage: "completed",
+                      result: {
+                        success: true,
+                        incidentId: data.incident_id,
+                        package: data.package,
+                        pr: null,
+                        diffPath: null,
+                        diffPreview: data.diff,
+                        filesModified: data.files_modified,
+                        error: null,
+                      },
+                    }
+                  : null
+              );
+
+              setAdvisories((prev) => prev.filter((a) => a.id !== adv.id));
+              setStats((prev) =>
+                prev
+                  ? {
+                      ...prev,
+                      activeAdvisories: Math.max(0, prev.activeAdvisories - 1),
+                      resolvedMigrations: prev.resolvedMigrations + 1,
+                    }
+                  : null
+              );
+              loadData();
+            } else if (data.type === "error") {
+              throw new Error(data.error || "Remediation failed");
+            }
+          } catch {
+            // Ignore partial chunks
+          }
+        }
+      }
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Remediation failed";
+      setRemediationModal((prev) => (prev ? { ...prev, stage: "error", error: msg } : null));
     } finally {
-      setIngestSubmitting(false);
+      setRemediating(false);
     }
   };
+
+
 
   const filteredDeps = useMemo(() => {
     let rows = dependencies;
@@ -216,15 +347,7 @@ export default function ApiHealthPage() {
               <span>{syncing ? "Syncing PyPI..." : "Auto-Sync PyPI/GitHub"}</span>
             </button>
 
-            <button
-              onClick={() => setShowIngestModal(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-xs font-medium text-foreground hover:border-border-strong hover:bg-surface-hover transition"
-            >
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-              <span>Ingest Vendor Webhook</span>
-            </button>
+
 
             <button
               onClick={handleScanNow}
@@ -354,14 +477,8 @@ export default function ApiHealthPage() {
               </div>
               <p className="text-sm font-medium">No Active Breaking Changes Detected</p>
               <p className="text-xs text-muted max-w-md mx-auto">
-                No external API or dependency breaking changes have been reported. When a vendor publishes an advisory or you simulate one, Sentinel maps affected files and DataHub downstream assets.
+                No external API or dependency breaking changes have been reported. When a vendor publishes an advisory or the registry monitor detects one, Sentinel maps affected files and DataHub downstream assets.
               </p>
-              <button
-                onClick={() => setShowIngestModal(true)}
-                className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent-soft px-3.5 py-1.5 text-xs text-accent hover:opacity-90 transition"
-              >
-                Simulate Vendor Breaking Change
-              </button>
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4">
@@ -395,10 +512,12 @@ export default function ApiHealthPage() {
                         Blast Radius ({adv.impactedCount} assets) →
                       </button>
                       <button
-                        onClick={handleScanNow}
-                        className="rounded-md bg-accent px-2.5 py-1 text-xs text-white hover:opacity-90 transition"
+                        onClick={() => handleAutoRemediate(adv)}
+                        disabled={remediating}
+                        className="rounded-md bg-accent px-2.5 py-1 text-xs text-white hover:opacity-90 disabled:opacity-50 transition flex items-center gap-1.5"
                       >
-                        Auto-Remediate
+                        {remediating && <span className="h-2 w-2 rounded-full bg-white animate-ping" />}
+                        <span>{remediating ? "Remediating..." : "Auto-Remediate"}</span>
                       </button>
                     </div>
                   </div>
@@ -789,107 +908,206 @@ export default function ApiHealthPage() {
         </div>
       )}
 
-      {/* INGEST ADVISORY WEBHOOK MODAL */}
-      {showIngestModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-6">
-          <div className="card w-full max-w-lg bg-surface border-border-strong p-6 space-y-4">
+
+      {/* AUTONOMOUS REMEDIATION LIVE PROGRESS MODAL */}
+      {remediationModal?.open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-6 backdrop-blur-sm">
+          <div className="card w-full max-w-xl bg-surface border-border-strong p-6 space-y-5 shadow-2xl">
             <div className="flex items-center justify-between border-b border-border pb-3">
-              <div>
-                <h3 className="text-sm font-semibold">Publish Vendor Advisory Webhook</h3>
-                <p className="text-xs text-muted">Simulate an external API provider publishing a breaking change notice.</p>
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full bg-accent animate-pulse" />
+                <h3 className="text-sm font-semibold">
+                  Autonomous API Remediation — {remediationModal.adv.package}
+                </h3>
               </div>
-              <button
-                onClick={() => setShowIngestModal(false)}
-                className="text-muted hover:text-foreground text-sm"
-              >
-                ✕
-              </button>
+              {remediationModal.stage === "completed" || remediationModal.stage === "error" ? (
+                <button
+                  onClick={() => setRemediationModal(null)}
+                  className="text-muted hover:text-foreground text-sm"
+                >
+                  ✕
+                </button>
+              ) : null}
             </div>
 
-            <form onSubmit={handlePublishAdvisory} className="space-y-3.5 text-xs">
-              <div>
-                <label className="block text-muted mb-1 font-medium">Package / Vendor Name</label>
-                <input
-                  type="text"
-                  required
-                  value={ingestPkg}
-                  onChange={(e) => setIngestPkg(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-foreground outline-none focus:border-accent"
-                />
-              </div>
+            {/* Stages Timeline */}
+            <div className="space-y-3">
+              {[
+                {
+                  id: "analyzing",
+                  label: "1. AST Codebase Inspection & DataHub Lineage Mapping",
+                  desc: `Found ${remediationModal.adv.usagesCount} call-site(s) across repository.`,
+                },
+                {
+                  id: "synthesizing",
+                  label: "2. LLM Backward-Compatible Code Synthesis",
+                  desc: "Generating targeted patch avoiding breaking changes.",
+                },
+                {
+                  id: "validating",
+                  label: "3. Shadow Environment Sandboxed Validation",
+                  desc: "Running AST parser & Python syntax safety gate.",
+                },
+                {
+                  id: "completed",
+                  label: "4. Migration Diff & PR Draft Generation",
+                  desc: "Advisory resolved and archived into Migration History.",
+                },
+              ].map((step, idx) => {
+                const stageOrder = ["analyzing", "synthesizing", "validating", "completed"];
+                const currentIdx = stageOrder.indexOf(remediationModal.stage);
+                const stepIdx = stageOrder.indexOf(step.id);
+                const isCurrent = remediationModal.stage === step.id;
+                const isPassed = (currentIdx > stepIdx && currentIdx !== -1) || remediationModal.stage === "completed";
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-muted mb-1 font-medium">From Version</label>
-                  <input
-                    type="text"
-                    value={ingestFrom}
-                    onChange={(e) => setIngestFrom(e.target.value)}
-                    className="w-full rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-foreground outline-none focus:border-accent"
-                  />
+                return (
+                  <div
+                    key={idx}
+                    className={`flex items-start gap-3 rounded-lg border p-3 text-xs transition ${
+                      isCurrent
+                        ? "border-accent/50 bg-accent-soft/30 text-foreground"
+                        : isPassed
+                        ? "border-good/40 bg-good-soft/20 text-foreground"
+                        : "border-border/50 bg-surface-raised/40 text-muted opacity-60"
+                    }`}
+                  >
+                    <div className="pt-0.5">
+                      {isPassed ? (
+                        <span className="text-good font-bold">✓</span>
+                      ) : isCurrent ? (
+                        <div className="h-3 w-3 rounded-full border-2 border-accent border-t-transparent animate-spin" />
+                      ) : (
+                        <span className="text-muted font-mono">{idx + 1}</span>
+                      )}
+                    </div>
+                    <div>
+                      <p className="font-medium">{step.label}</p>
+                      <p className="text-[11px] text-muted mt-0.5">{step.desc}</p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Multi-File Live Code Writing Terminal */}
+            {remediationModal.stage !== "completed" && (
+              <div className="space-y-3 rounded-lg border border-border bg-black/95 p-4 font-mono text-xs shadow-2xl">
+                {/* File Tabs */}
+                <div className="flex items-center justify-between border-b border-border/60 pb-2.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {Object.entries(remediationModal.files).map(([fileName, fileData]) => {
+                      const isActive = remediationModal.activeFile === fileName;
+                      return (
+                        <button
+                          key={fileName}
+                          type="button"
+                          onClick={() =>
+                            setRemediationModal((prev) => (prev ? { ...prev, activeFile: fileName } : null))
+                          }
+                          className={`flex items-center gap-1.5 rounded px-2.5 py-1 text-[11px] font-medium transition ${
+                            isActive
+                              ? "bg-accent/20 border border-accent/60 text-foreground"
+                              : "bg-surface-raised/40 border border-border/40 text-muted hover:text-foreground"
+                          }`}
+                        >
+                          {fileData.done ? (
+                            <span className="text-good font-bold">✓</span>
+                          ) : (
+                            <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+                          )}
+                          <span>{fileName}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <span className="text-[10px] text-muted font-semibold tracking-wider">
+                    {remediationModal.stage === "validating" ? "AST VALIDATING" : "WRITING PATCH"}
+                  </span>
                 </div>
-                <div>
-                  <label className="block text-muted mb-1 font-medium">To (Breaking) Version</label>
-                  <input
-                    type="text"
-                    value={ingestTo}
-                    onChange={(e) => setIngestTo(e.target.value)}
-                    className="w-full rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-foreground outline-none focus:border-accent"
-                  />
+
+                {/* Real-time Code Content */}
+                <div className="max-h-60 overflow-y-auto scrollbar-thin pt-1 text-muted-foreground whitespace-pre-wrap leading-relaxed text-[11px]">
+                  {remediationModal.files[remediationModal.activeFile]?.code ? (
+                    <code>{remediationModal.files[remediationModal.activeFile].code}</code>
+                  ) : (
+                    <span className="text-muted-dim italic">
+                      Scanning call-sites and writing backward-compatible changes to {remediationModal.activeFile}...
+                    </span>
+                  )}
+                  <span className="inline-block w-1.5 h-3.5 bg-accent ml-0.5 animate-pulse" />
                 </div>
               </div>
+            )}
 
-              <div>
-                <label className="block text-muted mb-1 font-medium">Breaking Change Summary</label>
-                <input
-                  type="text"
-                  required
-                  value={ingestSummary}
-                  onChange={(e) => setIngestSummary(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-foreground outline-none focus:border-accent"
-                />
+            {/* Error Message */}
+            {remediationModal.stage === "error" && (
+              <div className="card border-bad/40 bg-bad-soft/30 p-3.5 text-xs text-bad">
+                <p className="font-medium">Remediation Failed</p>
+                <p className="text-[11px] mt-0.5">{remediationModal.error}</p>
               </div>
+            )}
 
-              <div>
-                <label className="block text-muted mb-1 font-medium">Migration Instructions</label>
-                <textarea
-                  rows={2}
-                  value={ingestMigration}
-                  onChange={(e) => setIngestMigration(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-foreground outline-none focus:border-accent"
-                />
+            {/* Completion Result Box */}
+            {remediationModal.stage === "completed" && remediationModal.result && (
+              <div className="space-y-3 pt-2">
+                <div className="rounded-lg border border-good/40 bg-good-soft/20 p-3.5 space-y-1.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <p className="font-semibold text-good">
+                      ✓ Migration Artifact Generated ({remediationModal.result.incidentId})
+                    </p>
+                    <span className="text-[11px] font-mono text-muted">
+                      {remediationModal.result.filesModified} file(s) updated
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-muted">
+                    This advisory has been remediated and moved from Active Advisories to Migration History.
+                  </p>
+                </div>
+
+                <div className="rounded-lg border border-border bg-black/70 p-3 max-h-40 overflow-y-auto font-mono text-[11px] text-muted-foreground scrollbar-thin">
+                  <pre className="whitespace-pre-wrap">{remediationModal.result.diffPreview}</pre>
+                </div>
               </div>
+            )}
 
-              <div>
-                <label className="block text-muted mb-1 font-medium">Affected Symbols (comma separated)</label>
-                <input
-                  type="text"
-                  value={ingestSymbols}
-                  onChange={(e) => setIngestSymbols(e.target.value)}
-                  className="w-full rounded-lg border border-border bg-surface-raised px-3 py-1.5 text-foreground outline-none focus:border-accent"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-3 border-t border-border">
+            {/* Actions */}
+            <div className="flex justify-end gap-2 pt-3 border-t border-border">
+              {remediationModal.stage === "completed" ? (
+                <>
+                  <button
+                    onClick={() => {
+                      setRemediationModal(null);
+                      setActiveTab("migrations");
+                    }}
+                    className="rounded-lg border border-border bg-surface-raised px-3.5 py-1.5 text-xs font-medium text-foreground hover:bg-surface-hover transition"
+                  >
+                    View in Migration History →
+                  </button>
+                  <button
+                    onClick={() => setRemediationModal(null)}
+                    className="rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 transition"
+                  >
+                    Done
+                  </button>
+                </>
+              ) : remediationModal.stage === "error" ? (
                 <button
-                  type="button"
-                  onClick={() => setShowIngestModal(false)}
-                  className="rounded-lg border border-border px-3.5 py-1.5 text-xs text-muted hover:text-foreground"
+                  onClick={() => setRemediationModal(null)}
+                  className="rounded-lg border border-border px-4 py-1.5 text-xs font-medium text-muted hover:text-foreground"
                 >
-                  Cancel
+                  Close
                 </button>
-                <button
-                  type="submit"
-                  disabled={ingestSubmitting}
-                  className="rounded-lg bg-accent px-4 py-1.5 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
-                >
-                  {ingestSubmitting ? "Publishing..." : "POST Webhook Advisory"}
-                </button>
-              </div>
-            </form>
+              ) : (
+                <span className="text-xs text-muted italic flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 rounded-full bg-accent animate-ping" />
+                  Running autonomous remediation...
+                </span>
+              )}
+            </div>
           </div>
         </div>
       )}
+
     </div>
   );
 }

@@ -35,6 +35,7 @@ from api.types import (
     Migration,
     RegistrySyncItem,
     RegistrySyncResult,
+    RemediateAdvisoryResult,
     Runbook,
     SavingsDigest,
     Stats,
@@ -288,16 +289,7 @@ class Query:
     def api_health_stats(self) -> ApiHealthStats:
         return ApiHealthStats(**api_health.api_health_stats())
 
-
-@strawberry.type
-class Mutation:
-    """Side-effectful operations — scans, syncs, and sweep triggers.
-
-    These were previously on the Query root, which violated the GraphQL
-    convention that queries are idempotent reads.
-    """
-
-    @strawberry.mutation
+    @strawberry.field
     def trigger_dependency_scan(self) -> DependencyScanResult:
         res = api_health.trigger_dependency_scan()
         return DependencyScanResult(
@@ -307,7 +299,7 @@ class Mutation:
             error=res.get("error"),
         )
 
-    @strawberry.mutation
+    @strawberry.field
     def sync_registries(self) -> RegistrySyncResult:
         res = api_health.sync_registries()
         generated = [RegistrySyncItem(**g) for g in res.get("generated", [])]
@@ -319,3 +311,25 @@ class Mutation:
             error=res.get("error"),
             generated=generated,
         )
+
+    @strawberry.field
+    def remediate_advisory(self, advisory_id: str) -> RemediateAdvisoryResult:
+        res = api_health.remediate_advisory(advisory_id)
+        return RemediateAdvisoryResult(
+            success=res["success"],
+            incident_id=res.get("incident_id"),
+            package=res.get("package"),
+            pr=res.get("pr"),
+            diff_path=res.get("diff_path"),
+            diff_preview=res.get("diff_preview"),
+            files_modified=res.get("files_modified", 0),
+            error=res.get("error"),
+        )
+
+
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
+    def noop(self) -> bool:
+        """Placeholder — Strawberry requires at least one mutation field."""
+        return True

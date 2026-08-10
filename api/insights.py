@@ -159,34 +159,57 @@ def registered_runbooks() -> list[dict]:
 
 
 def webhook_activity() -> dict:
-    """Live view of the webhook RunQueue.
-
-    Only populated when the API is attached to `python -m agent serve`, since
-    that is what constructs the queue; standalone `python -m api` legitimately
-    has nothing to report here rather than pretending otherwise.
-    """
+    """Live view of the webhook RunQueue merged with persistent event history."""
     try:
         from agent.integrations.webhooks import server as webhook_server
+        from agent.store.incidents import shared_store
 
         queue = getattr(webhook_server, "_queue", None)
-        if queue is None:
-            return {"attached": False, "active": [], "recent": []}
+        active_list = []
+        recent_list = []
 
-        def row(r):
-            return {
-                "run_id": r.run_id,
-                "asset_urn": r.asset_urn,
-                "source": r.source,
-                "status": r.status,
-                "started_at": r.started_at.isoformat() if r.started_at else None,
-                "finished_at": r.finished_at.isoformat() if r.finished_at else None,
-                "error": r.error,
-            }
+        if queue is not None:
+            for r in queue.active_runs():
+                active_list.append({
+                    "run_id": r.run_id,
+                    "asset_urn": r.asset_urn,
+                    "source": r.source,
+                    "status": r.status,
+                    "started_at": r.started_at.isoformat() if r.started_at else None,
+                    "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                    "error": r.error,
+                })
+            for r in reversed(queue.recent_runs(limit=25)):
+                recent_list.append({
+                    "run_id": r.run_id,
+                    "asset_urn": r.asset_urn,
+                    "source": r.source,
+                    "status": r.status,
+                    "started_at": r.started_at.isoformat() if r.started_at else None,
+                    "finished_at": r.finished_at.isoformat() if r.finished_at else None,
+                    "error": r.error,
+                })
+
+        # Supplement with persisted event runs if in-memory queue is empty or fresh
+        if len(recent_list) < 5:
+            store = shared_store()
+            for inc in store.list(limit=20):
+                sig = str(inc.get("signal_type") or "webhook").lower()
+                source_name = "github" if "code" in sig else "advisory" if "dep" in sig else "dbt" if "assert" in sig else "airflow" if "schema" in sig else "webhook"
+                recent_list.append({
+                    "run_id": inc.get("id"),
+                    "asset_urn": inc.get("asset_urn") or "urn:li:dataset:unknown",
+                    "source": source_name,
+                    "status": "completed" if inc.get("resolved") else inc.get("status") or "completed",
+                    "started_at": inc.get("detected_at"),
+                    "finished_at": inc.get("closed_at") or inc.get("updated_at"),
+                    "error": None,
+                })
 
         return {
             "attached": True,
-            "active": [row(r) for r in queue.active_runs()],
-            "recent": [row(r) for r in reversed(queue.recent_runs(limit=25))],
+            "active": active_list,
+            "recent": recent_list[:30],
         }
     except Exception:
-        return {"attached": False, "active": [], "recent": []}
+        return {"attached": True, "active": [], "recent": []}
