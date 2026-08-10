@@ -12,6 +12,10 @@ When upstream data breaks, models drift, or breaking API migrations occur, OmniS
 
 <div align="center">
 
+<p align="center">
+  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
+</p>
+
 ### 🎬 Live Autonomous Self-Healing Demo in Action
 
 ![OmniSRE Live Incident Remediation Demo](assets/omnisre_demo.gif)
@@ -24,9 +28,6 @@ When upstream data breaks, models drift, or breaking API migrations occur, OmniS
 
 </div>
 
-<p align="center">
-  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
-</p>
 
 ---
 
