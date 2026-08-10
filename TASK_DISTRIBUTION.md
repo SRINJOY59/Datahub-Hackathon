@@ -459,11 +459,12 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 
 ## 6. Product surface (what users actually touch)
 - ⭐ **Slack/Teams integration** ✅ — incident channel, audience-aware messages (`agent/reporting/comms.py`), interactive Socket Mode approvals.
-- ⭐ **Web dashboard** ✅ — Next.js live command center with Overview, Incidents, Pipeline Observability, Trends, Asset Health, Runbooks, and Activity audit trail.
+- ⭐ **Web dashboard** ✅ — Next.js live command center with Overview, Incidents, Pipeline Observability, Trends, Asset Health, API Health (Self-Maintaining APIs), Runbooks, and Activity audit trail.
 - **Pipeline Observability** ✅ — stage-by-stage traces, execution times, real-time log streaming with level filters, and throughput/latency/error-rate sparklines.
+- **Self-Maintaining APIs Dashboard** ✅ — dedicated `/api-health` interface with active breaking-change advisories, full codebase dependency inventory, lineage blast-radius graph, multi-file diff modal, and SRE scan/webhook triggers.
 - **Cost-of-incident meter** ✅ — dollar impact from the real blast radius × team-owned rates in `config/cost_model.yaml`, written into the asset's catalog "About" box; cites its assumptions.
 - **Trust badges / health scores** ✅ — a 0-100 score and A–D grade written onto each asset, refreshed whenever an incident closes.
-- **Ask-the-on-call** ✅ — grounded LLM chat over incident memory with full Markdown rendering, code blocks, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
+- **Ask-the-on-call** ✅ — grounded LLM chat over incident memory with full Markdown rendering, code snippets, lists, blockquotes, and interactive clickable incident badge citations (`INC-xxxx`).
 - **Paging** ✅ — PagerDuty routing for human-tier incidents (`shared_pagerduty`).
 
 ## 7. Platform & enterprise readiness
@@ -475,11 +476,13 @@ The intelligence is real; the *actions* are still stubbed. This is what converts
 
 ## 8. The self-maintaining-API wedge (YC framing)
 The dependency/API vertical is the sharpest standalone product ("Dependabot for APIs").
-- **Vendor changelog tracking** ⬜ — monitor SDK releases / OpenAPI diffs to derive
-  breaking changes automatically (today: hand-authored advisories).
+- **Vendor webhook ingestion** ✅ — `POST /api/v1/advisory` webhook endpoint for vendors and registries to push breaking-change advisories.
+- **Multi-file auto-migration** ✅ — AST scan + LLM rewrite across all affected call-sites + shadow verification + PR generation.
+- **Lineage blast radius** ✅ — traces external API releases across DataHub model and scoring deployment DAGs.
+- **SRE & on-call integration** ✅ — on-demand scan triggers, circuit breakers, trust score degradation, and dashboard visualization.
+- **Vendor changelog tracking** ⬜ — monitor SDK releases / OpenAPI diffs to derive breaking changes automatically.
 - **Per-provider agents** ⬜ — "install Stripe's update agent."
-- **Neutral third-party service** ⬜ — track changes across many vendors, scan customer
-  repos, open PRs.
+- **Neutral third-party service** ⬜ — track changes across many vendors, scan customer repos, open PRs.
 - **Org-wide repo scanning** ⬜ — one advisory → PRs across every affected repo.
 
 ## Suggested build order (post-hackathon → product)

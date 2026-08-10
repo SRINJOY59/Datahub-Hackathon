@@ -17,14 +17,24 @@ import strawberry
 
 from agent.journal import ActionJournal
 from agent.store import IncidentStore, shared_store
-from api import insights
+from api import api_health, insights
 from api.types import (
     ActionCount,
     ActionEntry,
+    Advisory,
+    AdvisoryUsage,
+    ApiHealthStats,
+    BlastRadius,
+    BlastRadiusNode,
     ChangeTypeCount,
     DayPoint,
+    Dependency,
+    DependencyScanResult,
     Incident,
     JournalEntry,
+    Migration,
+    RegistrySyncItem,
+    RegistrySyncResult,
     Runbook,
     SavingsDigest,
     Stats,
@@ -216,4 +226,63 @@ class Query:
             llm_model=os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
             webhook_sources_enabled=sources,
             sweep_interval_minutes=sweep,
+        )
+
+    # --- Self-Maintaining APIs & Dependency Health ------------------------- #
+    @strawberry.field
+    def api_dependencies(self, force: bool = False) -> list[Dependency]:
+        return [Dependency(**row) for row in api_health.list_dependencies(force=force)]
+
+    @strawberry.field
+    def active_advisories(self) -> list[Advisory]:
+        rows = api_health.list_advisories()
+        res = []
+        for r in rows:
+            usages = [AdvisoryUsage(**u) for u in r.get("usages", [])]
+            r_copy = dict(r)
+            r_copy["usages"] = usages
+            res.append(Advisory(**r_copy))
+        return res
+
+    @strawberry.field
+    def migration_history(self) -> list[Migration]:
+        return [Migration(**row) for row in api_health.migration_history()]
+
+    @strawberry.field
+    def dependency_blast_radius(self, package: str) -> BlastRadius:
+        data = api_health.dependency_blast_radius(package)
+        downstream = [BlastRadiusNode(**d) for d in data.get("downstream_assets", [])]
+        return BlastRadius(
+            package=data["package"],
+            files=data["files"],
+            direct_assets=data["direct_assets"],
+            downstream_assets=downstream,
+            total_impacted=data["total_impacted"],
+        )
+
+    @strawberry.field
+    def api_health_stats(self) -> ApiHealthStats:
+        return ApiHealthStats(**api_health.api_health_stats())
+
+    @strawberry.field
+    def trigger_dependency_scan(self) -> DependencyScanResult:
+        res = api_health.trigger_dependency_scan()
+        return DependencyScanResult(
+            scanned=res["scanned"],
+            advisories_checked=res["advisories_checked"],
+            incidents_found=res["incidents_found"],
+            error=res.get("error"),
+        )
+
+    @strawberry.field
+    def sync_registries(self) -> RegistrySyncResult:
+        res = api_health.sync_registries()
+        generated = [RegistrySyncItem(**g) for g in res.get("generated", [])]
+        return RegistrySyncResult(
+            success=res["success"],
+            packages_checked=res["packages_checked"],
+            advisories_generated=res["advisories_generated"],
+            network_online=res["network_online"],
+            error=res.get("error"),
+            generated=generated,
         )

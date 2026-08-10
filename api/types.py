@@ -152,6 +152,111 @@ class WebhookActivity:
 
 
 @strawberry.type
+class Dependency:
+    package: str
+    installed_version: Optional[str]
+    files_using: int
+    impacted_assets: int
+    asset_urns: list[str]
+    has_advisory: bool
+    status: str  # healthy | at_risk | unknown
+
+
+@strawberry.type
+class AdvisoryUsage:
+    file: str
+    line: int
+    code: str
+
+
+@strawberry.type
+class Advisory:
+    id: str
+    package: str
+    import_name: str
+    from_version: str
+    to_version: str
+    kind: str
+    summary: str
+    migration: str
+    symbols: list[str]
+    usages: list[AdvisoryUsage]
+    usages_count: int
+    impacted_assets: list[str]
+    impacted_count: int
+    published_at: str
+
+
+@strawberry.type
+class Migration:
+    incident_id: str
+    asset_urn: str
+    asset_name: Optional[str]
+    status: str
+    resolved: bool
+    pr: Optional[str]
+    cost_usd: Optional[float]
+    narrative: str
+    detected_at: str
+    closed_at: Optional[str]
+    has_diff: bool
+    diff_preview: str
+
+
+@strawberry.type
+class BlastRadiusNode:
+    urn: str
+    name: str
+    entity_type: str
+    upstream_of: str
+
+
+@strawberry.type
+class BlastRadius:
+    package: str
+    files: list[str]
+    direct_assets: list[str]
+    downstream_assets: list[BlastRadiusNode]
+    total_impacted: int
+
+
+@strawberry.type
+class ApiHealthStats:
+    total_dependencies: int
+    at_risk: int
+    healthy: int
+    active_advisories: int
+    resolved_migrations: int
+    pending_migrations: int
+    total_affected_usages: int
+
+
+@strawberry.type
+class DependencyScanResult:
+    scanned: bool
+    advisories_checked: int
+    incidents_found: int
+    error: Optional[str] = None
+
+
+@strawberry.type
+class RegistrySyncItem:
+    package: str
+    path: str
+    source: str
+
+
+@strawberry.type
+class RegistrySyncResult:
+    success: bool
+    packages_checked: int
+    advisories_generated: int
+    network_online: bool
+    error: Optional[str] = None
+    generated: list[RegistrySyncItem] = strawberry.field(default_factory=list)
+
+
+@strawberry.type
 class SystemStatus:
     """What is actually alive, for the dashboard's health panel — not
     aspirational config, observed state (or, for integrations, whether a

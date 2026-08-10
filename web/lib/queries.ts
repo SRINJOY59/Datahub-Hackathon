@@ -1,8 +1,15 @@
-import { gql } from "./graphql";
+import { gql, API_URL } from "./graphql";
 import type {
+  Advisory,
+  ApiHealthStats,
+  BlastRadius,
   DayPoint,
+  Dependency,
+  DependencyScanResult,
   Incident,
   JournalEntry,
+  Migration,
+  RegistrySyncResult,
   Runbook,
   SavingsDigest,
   Stats,
@@ -133,3 +140,114 @@ export async function fetchIncident(id: string, init?: RequestInit): Promise<Inc
   );
   return data.incident;
 }
+
+// --- Self-Maintaining APIs & Dependency Health ----------------------------- //
+
+export async function fetchApiHealthStats(init?: RequestInit): Promise<ApiHealthStats> {
+  const data = await gql<{ apiHealthStats: ApiHealthStats }>(
+    `query { apiHealthStats {
+      totalDependencies atRisk healthy activeAdvisories
+      resolvedMigrations pendingMigrations totalAffectedUsages
+    } }`,
+    undefined,
+    init,
+  );
+  return data.apiHealthStats;
+}
+
+export async function fetchDependencies(
+  force = false,
+  init?: RequestInit,
+): Promise<Dependency[]> {
+  const data = await gql<{ apiDependencies: Dependency[] }>(
+    `query($force: Boolean!) { apiDependencies(force: $force) {
+      package installedVersion filesUsing impactedAssets assetUrns hasAdvisory status
+    } }`,
+    { force },
+    init,
+  );
+  return data.apiDependencies;
+}
+
+export async function fetchAdvisories(init?: RequestInit): Promise<Advisory[]> {
+  const data = await gql<{ activeAdvisories: Advisory[] }>(
+    `query { activeAdvisories {
+      id package importName fromVersion toVersion kind summary migration
+      symbols usagesCount impactedCount publishedAt
+      usages { file line code }
+      impactedAssets
+    } }`,
+    undefined,
+    init,
+  );
+  return data.activeAdvisories;
+}
+
+export async function fetchMigrations(init?: RequestInit): Promise<Migration[]> {
+  const data = await gql<{ migrationHistory: Migration[] }>(
+    `query { migrationHistory {
+      incidentId assetUrn assetName status resolved pr costUsd narrative
+      detectedAt closedAt hasDiff diffPreview
+    } }`,
+    undefined,
+    init,
+  );
+  return data.migrationHistory;
+}
+
+export async function fetchBlastRadius(
+  pkg: string,
+  init?: RequestInit,
+): Promise<BlastRadius> {
+  const data = await gql<{ dependencyBlastRadius: BlastRadius }>(
+    `query($package: String!) { dependencyBlastRadius(package: $package) {
+      package files directAssets totalImpacted
+      downstreamAssets { urn name entityType upstreamOf }
+    } }`,
+    { package: pkg },
+    init,
+  );
+  return data.dependencyBlastRadius;
+}
+
+export async function triggerDependencyScan(): Promise<DependencyScanResult> {
+  const data = await gql<{ triggerDependencyScan: DependencyScanResult }>(
+    `query { triggerDependencyScan {
+      scanned advisoriesChecked incidentsFound error
+    } }`,
+  );
+  return data.triggerDependencyScan;
+}
+
+export async function syncRegistries(): Promise<RegistrySyncResult> {
+  const data = await gql<{ syncRegistries: RegistrySyncResult }>(
+    `query { syncRegistries {
+      success packagesChecked advisoriesGenerated networkOnline error
+      generated { package path source }
+    } }`,
+  );
+  return data.syncRegistries;
+}
+
+export async function ingestVendorAdvisory(payload: {
+  package: string;
+  import_name?: string;
+  from_version?: string;
+  to_version?: string;
+  kind?: string;
+  summary: string;
+  migration?: string;
+  symbols?: string[];
+}): Promise<{ accepted: boolean; advisory_id?: string; path?: string }> {
+  const res = await fetch(`${API_URL}/api/v1/advisory`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: "Failed to publish advisory" }));
+    throw new Error(err.detail || "Failed to publish advisory");
+  }
+  return res.json();
+}
+

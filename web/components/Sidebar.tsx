@@ -11,6 +11,7 @@ const NAV: { href: string; label: string; icon: React.ReactNode; group: string }
   { group: "Monitor", href: "/trends", label: "Trends", icon: <IconChart /> },
   { group: "Monitor", href: "/pipeline", label: "Pipeline", icon: <IconPipeline /> },
   { group: "Catalog", href: "/assets", label: "Asset health", icon: <IconShield /> },
+  { group: "Catalog", href: "/api-health", label: "API health", icon: <IconApi /> },
   { group: "Catalog", href: "/runbooks", label: "Runbooks", icon: <IconBook /> },
   { group: "Operate", href: "/activity", label: "Activity", icon: <IconPulse /> },
   { group: "Operate", href: "/chat", label: "Ask on-call", icon: <IconChat /> },
@@ -171,4 +172,7 @@ function IconPipeline() {
 }
 function IconChat() {
   return base(<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2Z" />);
+}
+function IconApi() {
+  return base(<><path d="m18 16 4-4-4-4" /><path d="m6 8-4 4 4 4" /><path d="m14.5 4-5 16" /></>);
 }
