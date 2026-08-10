@@ -13,6 +13,9 @@ walks for root-cause and blast-radius analysis.
 """
 from __future__ import annotations
 
+import os
+from typing import Optional
+
 import datahub.emitter.mce_builder as builder
 from datahub.emitter.mcp import MetadataChangeProposalWrapper
 from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
@@ -30,8 +33,9 @@ ENV = "PROD"
 class LineageWirer:
     """Emits the model <-> training-data <-> deployment lineage edges."""
 
-    def __init__(self, gms_server: str = "http://localhost:8080") -> None:
-        self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
+    def __init__(self, gms_server: Optional[str] = None) -> None:
+        server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+        self.graph = DataHubGraph(DataHubGraphConfig(server=server))
 
         self.model_urn = builder.make_ml_model_urn("mlflow", "fraud_detection_model_1", ENV)
         self.training_dataset_urns = [

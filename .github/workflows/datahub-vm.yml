@@ -1,0 +1,212 @@
+name: DataHub VM Management & Ingestion (GCP Compute Engine)
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "Action to perform on DataHub VM"
+        required: true
+        default: "provision"
+        type: choice
+        options:
+          - "provision"
+          - "run-ingestion"
+          - "start"
+          - "stop"
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'project-1e232997-e446-4263-977' }}
+  VM_NAME: datahub-vm
+
+jobs:
+  manage-datahub:
+    name: Manage DataHub VM & Ingestion
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud (WIF)
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ----------------------------------------------------------- #
+      # 1. Provision VM if action == 'provision'
+      # ----------------------------------------------------------- #
+      - name: Provision DataHub Compute Engine VM
+        if: ${{ github.event.inputs.action == 'provision' }}
+        run: |
+          echo "Checking firewall rules for ports 8080 & 9002..."
+          if ! gcloud compute firewall-rules describe allow-datahub --quiet 2>/dev/null; then
+            gcloud compute firewall-rules create allow-datahub \
+              --allow tcp:8080,tcp:9002,tcp:22 \
+              --target-tags=datahub-server \
+              --description="Allow DataHub GMS and Web UI"
+          fi
+
+          EXISTING_ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' 2>/dev/null | head -n 1)
+
+          if [ -n "$EXISTING_ZONE" ]; then
+            echo "Removing existing DataHub VM in zone '$EXISTING_ZONE' to ensure fresh installation..."
+            gcloud compute instances delete ${{ env.VM_NAME }} --zone="$EXISTING_ZONE" --quiet
+          fi
+
+          echo "Searching for available capacity across GCP regions..."
+          ZONES=("us-east1-b" "us-east1-c" "us-east1-d" "us-east4-a" "us-west1-b" "us-central1-a")
+          CREATED=0
+
+          for ZONE in "${ZONES[@]}"; do
+            echo "Attempting to create DataHub VM in zone $ZONE..."
+            if gcloud compute instances create ${{ env.VM_NAME }} \
+              --zone="$ZONE" \
+              --machine-type=e2-standard-2 \
+              --image-family=ubuntu-2204-lts \
+              --image-project=ubuntu-os-cloud \
+              --boot-disk-size=40GB \
+              --tags=datahub-server,http-server,https-server \
+              --metadata=startup-script='#!/bin/bash
+              exec > >(tee /var/log/datahub-startup.log) 2>&1
+              echo "=== Starting DataHub VM Setup ==="
+              apt-get update
+              apt-get install -y docker.io python3-pip curl
+              systemctl enable --now docker
+
+              # Install official Docker Compose v2 binary
+              echo "Installing Docker Compose..."
+              curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+              chmod +x /usr/local/bin/docker-compose
+              mkdir -p /usr/local/lib/docker/cli-plugins
+              cp /usr/local/bin/docker-compose /usr/local/lib/docker/cli-plugins/docker-compose
+
+              # Create 4GB swap to prevent JVM/Elasticsearch OOM on 8GB VM
+              if [ ! -f /swapfile ]; then
+                fallocate -l 4G /swapfile
+                chmod 600 /swapfile
+                mkswap /swapfile
+                swapon /swapfile
+                echo "/swapfile none swap sw 0 0" >> /etc/fstab
+              fi
+
+              # Install DataHub CLI and start quickstart
+              pip3 install --no-cache-dir acryl-datahub==1.7.0
+              export HOME=/root
+              export PYTHONIOENCODING=utf-8
+              datahub docker quickstart
+              echo "=== DataHub Quickstart Successfully Launched ==="
+              '; then
+              echo "Successfully created DataHub VM in zone $ZONE!"
+              CREATED=1
+              break
+            else
+              echo "Zone $ZONE unavailable, trying next..."
+            fi
+          done
+
+          if [ $CREATED -ne 1 ]; then
+            echo "ERROR: Failed to create VM across candidate regions."
+            exit 1
+          fi
+
+      # ----------------------------------------------------------- #
+      # 2. Start VM if action == 'start'
+      # ----------------------------------------------------------- #
+      - name: Start DataHub VM
+        if: ${{ github.event.inputs.action == 'start' }}
+        run: |
+          ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
+          if [ -n "$ZONE" ]; then
+            gcloud compute instances start ${{ env.VM_NAME }} --zone="$ZONE" --quiet
+          else
+            echo "VM not found. Run with action 'provision' first."
+            exit 1
+          fi
+
+      # ----------------------------------------------------------- #
+      # 3. Stop VM if action == 'stop'
+      # ----------------------------------------------------------- #
+      - name: Stop DataHub VM
+        if: ${{ github.event.inputs.action == 'stop' }}
+        run: |
+          ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
+          if [ -n "$ZONE" ]; then
+            gcloud compute instances stop ${{ env.VM_NAME }} --zone="$ZONE" --quiet
+            echo "DataHub VM stopped to save credits."
+          fi
+
+      # ----------------------------------------------------------- #
+      # 4. Resolve & Print VM IP Address
+      # ----------------------------------------------------------- #
+      - name: Get DataHub VM IP & Status
+        if: ${{ github.event.inputs.action != 'stop' }}
+        id: vm-ip
+        run: |
+          ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
+          IP=$(gcloud compute instances describe ${{ env.VM_NAME }} --zone="$ZONE" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
+          echo "VM Zone: $ZONE"
+          echo "VM External IP: $IP"
+          echo "=========================================================="
+          echo "DataHub Web UI : http://${IP}:9002"
+          echo "DataHub GMS API: http://${IP}:8080"
+          echo "=========================================================="
+          echo "datahub_ip=$IP" >> $GITHUB_OUTPUT
+          echo "vm_zone=$ZONE" >> $GITHUB_OUTPUT
+
+      # ----------------------------------------------------------- #
+      # 5. Wait for DataHub GMS Readiness & Run Ingestion
+      # ----------------------------------------------------------- #
+      - name: Run Pipeline & Ingest into Cloud DataHub
+        if: ${{ github.event.inputs.action == 'run-ingestion' || github.event.inputs.action == 'provision' }}
+        env:
+          DATAHUB_GMS_URL: http://${{ steps.vm-ip.outputs.datahub_ip }}:8080
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+          echo "Polling DataHub GMS at $DATAHUB_GMS_URL/config for readiness..."
+          READY=0
+          for i in {1..36}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$DATAHUB_GMS_URL/config" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "DataHub GMS responded with HTTP 200 OK! Ready for ingestion."
+              READY=1
+              break
+            fi
+            echo "Waiting for DataHub Docker containers & Java GMS to initialize (attempt $i/36, status: $HTTP_CODE)..."
+            sleep 10
+          done
+
+          if [ $READY -ne 1 ]; then
+            echo "ERROR: DataHub GMS did not become ready in time."
+            echo "Fetching VM serial port log for diagnostics..."
+            gcloud compute instances get-serial-port-output ${{ env.VM_NAME }} --zone="${{ steps.vm-ip.outputs.vm_zone }}" | tail -n 40
+            exit 1
+          fi
+
+          echo "Step 1: Generating synthetic raw seed data..."
+          python pipeline/generate_raw_data.py
+
+          echo "Step 2: Running dbt seed & build..."
+          cd pipeline/dbt
+          dbt seed --profiles-dir .
+          dbt run --profiles-dir .
+          dbt docs generate --profiles-dir .
+          dbt build --profiles-dir .
+          cd ../..
+
+          echo "Step 3: Training champion model in MLflow..."
+          python -m ml.train
+          python -m ml.score
+
+          echo "Step 4: Ingesting into Cloud DataHub at $DATAHUB_GMS_URL..."
+          python -m ingestion
+          echo "🎉 DataHub pipeline ingestion completed successfully!"

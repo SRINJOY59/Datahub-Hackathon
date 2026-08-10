@@ -7,7 +7,8 @@ These are the agent's POLICY INPUTS:
 
 Ownership drives the audience-aware incident comms. Idempotent.
 """
-from __future__ import annotations
+import os
+from typing import Optional
 
 import datahub.emitter.mce_builder as builder
 from datahub.emitter.mcp import MetadataChangeProposalWrapper
@@ -52,8 +53,9 @@ DATASETS = {
 class GovernanceApplier:
     """Emits tag definitions, owners, and per-asset tag/owner associations."""
 
-    def __init__(self, gms_server: str = "http://localhost:8080") -> None:
-        self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
+    def __init__(self, gms_server: Optional[str] = None) -> None:
+        server = gms_server or os.getenv("DATAHUB_GMS_URL", "http://localhost:8080")
+        self.graph = DataHubGraph(DataHubGraphConfig(server=server))
         self.model_urn = builder.make_ml_model_urn("mlflow", "fraud_detection_model_1", ENV)
         self.deploy_urn = builder.make_ml_model_deployment_urn("mlflow", "fraud_scoring_api", ENV)
 
