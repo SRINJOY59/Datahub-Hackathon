@@ -19,9 +19,9 @@ permissions:
   id-token: write
 
 env:
-  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
-  GCP_REGION: ${{ vars.GCP_REGION }}
-  ZONE: ${{ vars.GCP_REGION }}-a
+  GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'project-1e232997-e446-4263-977' }}
+  GCP_REGION: us-central1
+  ZONE: us-central1-a
   VM_NAME: datahub-vm
 
 jobs:
