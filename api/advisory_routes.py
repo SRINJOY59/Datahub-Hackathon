@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from api import api_health
@@ -43,6 +44,20 @@ def post_advisory(payload: AdvisoryPayload):
 def get_advisories():
     """List all registered vendor advisories."""
     return {"advisories": api_health.list_advisories()}
+
+
+@router.get("/advisories/{advisory_id}/stream-remediation")
+def stream_remediation(advisory_id: str):
+    """Server-Sent Events (SSE) streaming endpoint for live code synthesis & remediation."""
+    return StreamingResponse(
+        api_health.stream_remediate_advisory(advisory_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.post("/advisories/sync-registry")

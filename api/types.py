@@ -257,6 +257,18 @@ class RegistrySyncResult:
 
 
 @strawberry.type
+class RemediateAdvisoryResult:
+    success: bool
+    incident_id: Optional[str] = None
+    package: Optional[str] = None
+    pr: Optional[str] = None
+    diff_path: Optional[str] = None
+    diff_preview: Optional[str] = None
+    files_modified: int = 0
+    error: Optional[str] = None
+
+
+@strawberry.type
 class SweepStatus:
     """Observable state of the periodic background sweep."""
     interval_minutes: int

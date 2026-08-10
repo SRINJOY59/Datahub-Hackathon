@@ -231,3 +231,14 @@ export interface RegistrySyncResult {
   error: string | null;
   generated: RegistrySyncItem[];
 }
+
+export interface RemediateAdvisoryResult {
+  success: boolean;
+  incidentId: string | null;
+  package: string | null;
+  pr: string | null;
+  diffPath: string | null;
+  diffPreview: string | null;
+  filesModified: number;
+  error: string | null;
+}

@@ -1,4 +1,4 @@
-import { gql, API_URL } from "./graphql";
+import { gql } from "./graphql";
 import type {
   Advisory,
   ApiHealthStats,
@@ -10,6 +10,7 @@ import type {
   JournalEntry,
   Migration,
   RegistrySyncResult,
+  RemediateAdvisoryResult,
   Runbook,
   SavingsDigest,
   Stats,
@@ -229,25 +230,13 @@ export async function syncRegistries(): Promise<RegistrySyncResult> {
   return data.syncRegistries;
 }
 
-export async function ingestVendorAdvisory(payload: {
-  package: string;
-  import_name?: string;
-  from_version?: string;
-  to_version?: string;
-  kind?: string;
-  summary: string;
-  migration?: string;
-  symbols?: string[];
-}): Promise<{ accepted: boolean; advisory_id?: string; path?: string }> {
-  const res = await fetch(`${API_URL}/api/v1/advisory`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: "Failed to publish advisory" }));
-    throw new Error(err.detail || "Failed to publish advisory");
-  }
-  return res.json();
+export async function remediateAdvisory(advisoryId: string): Promise<RemediateAdvisoryResult> {
+  const data = await gql<{ remediateAdvisory: RemediateAdvisoryResult }>(
+    `query($advisoryId: String!) { remediateAdvisory(advisoryId: $advisoryId) {
+      success incidentId package pr diffPath diffPreview filesModified error
+    } }`,
+    { advisoryId },
+  );
+  return data.remediateAdvisory;
 }
 

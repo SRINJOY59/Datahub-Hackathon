@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { fetchIncidents } from "@/lib/queries";
 import type { Incident } from "@/lib/types";
 import { StatusBadge, TierBadge } from "@/components/Badge";
@@ -11,6 +12,7 @@ type SortKey = "detectedAt" | "costUsd" | "status";
 const STATUS_FILTERS = ["all", "open", "resolved", "contained", "escalated", "rolled_back"];
 
 export default function IncidentsPage() {
+  const router = useRouter();
   const [incidents, setIncidents] = useState<Incident[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
@@ -147,7 +149,7 @@ export default function IncidentsPage() {
               <tr
                 key={inc.id}
                 className="cursor-pointer border-b border-border last:border-0 hover:bg-surface-raised"
-                onClick={() => (window.location.href = `/incidents/${inc.id}`)}
+                onClick={() => router.push(`/incidents/${inc.id}`)}
               >
                 <td className="px-4 py-3">
                   <Link href={`/incidents/${inc.id}`} className="font-mono text-xs text-accent">

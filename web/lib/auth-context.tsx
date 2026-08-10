@@ -27,26 +27,27 @@ const LOCAL_STORAGE_DEV_USER = "sentinel_dev_user";
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
     const supabase = getSupabaseClient();
 
     if (!supabase) {
-      // If Supabase is not yet configured, check for local simulated session
-      if (typeof window !== "undefined") {
-        const saved = localStorage.getItem(LOCAL_STORAGE_DEV_USER);
-        if (saved) {
-          try {
-            const parsed = JSON.parse(saved);
-            setUser(parsed.user);
-            setSession(parsed.session);
-          } catch {
-            localStorage.removeItem(LOCAL_STORAGE_DEV_USER);
+      queueMicrotask(() => {
+        if (typeof window !== "undefined") {
+          const saved = localStorage.getItem(LOCAL_STORAGE_DEV_USER);
+          if (saved) {
+            try {
+              const parsed = JSON.parse(saved);
+              setUser(parsed.user || null);
+              setSession(parsed.session || null);
+            } catch {
+              localStorage.removeItem(LOCAL_STORAGE_DEV_USER);
+            }
           }
         }
-      }
-      setLoading(false);
+        setLoading(false);
+      });
       return;
     }
 

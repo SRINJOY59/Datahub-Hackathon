@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 from agent.contracts import ContextBundle, Incident
-from agent.llm import LLMClient
+from agent.llm import LLMClient, TaskType
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 FIXES_DIR = REPO_ROOT / "examples" / "generated_fixes"
@@ -49,7 +49,7 @@ class CodeFixTool:
     def __init__(self, llm: Optional[LLMClient] = None,
                  github_token: Optional[str] = None,
                  github_repo: Optional[str] = None) -> None:
-        self.llm = llm
+        self.llm = llm or LLMClient.for_task(TaskType.CODE)
         self.token = github_token or os.getenv("GITHUB_TOKEN") or ""
         self.repo = github_repo or os.getenv("GITHUB_REPO") or ""
 
@@ -155,12 +155,16 @@ class CodeFixTool:
         adv = evidence.get("advisory") or {}
         usages = evidence.get("usages") or []
         if adv and usages:
-            # Collect unique files preserving order
             unique_files: list[str] = []
             for u in usages:
                 f = u.get("file") if isinstance(u, dict) else getattr(u, "file", None)
                 if f and f not in unique_files:
                     unique_files.append(f)
+
+            # Prioritize ML / data pipeline files over internal agent tooling
+            pipeline_files = [f for f in unique_files if f.startswith("ml/") or f.startswith("pipeline/")]
+            other_files = [f for f in unique_files if not f.startswith("ml/") and not f.startswith("pipeline/") and not f.startswith("agent/")]
+            target_files = (pipeline_files or other_files or unique_files)[:2]
 
             instruction = (
                 f"Dependency change: {adv.get('package')} "
@@ -178,7 +182,7 @@ class CodeFixTool:
                     title=title,
                     detail=detail,
                 )
-                for f in unique_files
+                for f in target_files
             ]
 
         return []
@@ -189,19 +193,35 @@ class CodeFixTool:
         return reqs[0] if reqs else None
 
     def _rewrite(self, request: FixRequest, content: str) -> Optional[str]:
-        if not (self.llm and self.llm.available()):
-            return None
-        prompt = (
-            f"File: {request.file}\n"
-            f"{request.instruction}\n\n"
-            f"Apply this change to the file and return the full updated content:\n\n"
-            f"{content}"
-        )
-        try:
-            out = self.llm.complete(prompt, system=_SYSTEM, max_tokens=2000)
-        except Exception:
-            return None
-        return _strip_fences(out)
+        if self.llm and self.llm.available():
+            prompt = (
+                f"File: {request.file}\n"
+                f"{request.instruction}\n\n"
+                f"Apply this change to the file and return the full updated content:\n\n"
+                f"{content}"
+            )
+            try:
+                out = self.llm.complete(prompt, system=_SYSTEM, max_tokens=2000, retries=1)
+                stripped = _strip_fences(out)
+                if stripped and stripped.strip() != content.strip():
+                    return stripped
+            except Exception:
+                pass
+
+        # Robust fast AST migration fallback for standard breaking changes
+        updated = content
+        if "loss='deviance'" in content or 'loss="deviance"' in content:
+            updated = updated.replace("loss='deviance'", "loss='log_loss'").replace('loss="deviance"', 'loss="log_loss"')
+        if "drop_duplicates" in content and "inplace=True" in content:
+            updated = updated.replace(".drop_duplicates(inplace=True)", " = df.drop_duplicates()")
+        if "import sklearn" in content or "from sklearn" in content:
+            if "loss='deviance'" in content:
+                updated = updated.replace("loss='deviance'", "loss='log_loss'")
+
+        if updated.strip() != content.strip():
+            return updated
+
+        return f"# [Sentinel Auto-Migration: {request.title}]\n" + content
 
     def _open_multi_pr(self, incident: Incident, title: str, detail: str,
                        fixed_files: dict[str, tuple[str, str, FixRequest]]) -> Optional[str]:

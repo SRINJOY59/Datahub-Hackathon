@@ -12,7 +12,12 @@ interface Message {
 const STORAGE_KEY = "sentinel-chat-session";
 
 export default function ChatPage() {
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string>(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem(STORAGE_KEY) || "";
+    }
+    return "";
+  });
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
@@ -26,15 +31,13 @@ export default function ChatPage() {
   const refreshSessions = () => fetchSessions().then(setSessions).catch(() => {});
 
   useEffect(() => {
-    const stored = typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
-    if (stored) {
-      setSessionId(stored);
-      fetchSessionHistory(stored)
+    if (sessionId) {
+      fetchSessionHistory(sessionId)
         .then((hist) => setMessages(hist.map((m) => ({ role: m.role, content: m.content }))))
         .catch(() => {});
     }
     refreshSessions();
-  }, []);
+  }, [sessionId]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -82,7 +85,7 @@ export default function ChatPage() {
   }
 
   function newSession() {
-    setSessionId(null);
+    setSessionId("");
     setMessages([]);
     localStorage.removeItem(STORAGE_KEY);
   }
