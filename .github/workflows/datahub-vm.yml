@@ -6,13 +6,14 @@ on:
       action:
         description: "Action to perform on DataHub VM"
         required: true
-        default: "provision"
+        default: "run-ingestion"
         type: choice
         options:
+          - "run-ingestion"
           - "provision"
           - "start"
           - "stop"
-          - "run-ingestion"
+          - "check-status"
 
 permissions:
   contents: read
@@ -41,12 +42,12 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       # ----------------------------------------------------------- #
-      # 1. Provision VM with multi-region failover (us-east1 / us-east4 / us-west1 / us-central1)
+      # 1. Provision VM if action == 'provision'
       # ----------------------------------------------------------- #
       - name: Provision DataHub Compute Engine VM
         if: ${{ github.event.inputs.action == 'provision' }}
         run: |
-          echo "Checking if firewall rule exists..."
+          echo "Checking firewall rules for ports 8080 & 9002..."
           if ! gcloud compute firewall-rules describe allow-datahub --quiet 2>/dev/null; then
             gcloud compute firewall-rules create allow-datahub \
               --allow tcp:8080,tcp:9002 \
@@ -54,7 +55,6 @@ jobs:
               --description="Allow DataHub GMS and Web UI"
           fi
 
-          # Check if VM already exists across any zone in the project
           EXISTING_ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' 2>/dev/null | head -n 1)
 
           if [ -n "$EXISTING_ZONE" ]; then
@@ -62,18 +62,7 @@ jobs:
             gcloud compute instances start ${{ env.VM_NAME }} --zone="$EXISTING_ZONE" --quiet
           else
             echo "Searching for available capacity across GCP regions..."
-            ZONES=(
-              "us-east1-b"
-              "us-east1-c"
-              "us-east1-d"
-              "us-east4-a"
-              "us-east4-b"
-              "us-west1-b"
-              "us-west1-c"
-              "us-central1-b"
-              "us-central1-c"
-              "us-central1-a"
-            )
+            ZONES=("us-east1-b" "us-east1-c" "us-east1-d" "us-east4-a" "us-west1-b" "us-central1-a")
             CREATED=0
 
             for ZONE in "${ZONES[@]}"; do
@@ -83,20 +72,35 @@ jobs:
                 --machine-type=e2-standard-2 \
                 --image-family=ubuntu-2204-lts \
                 --image-project=ubuntu-os-cloud \
-                --boot-disk-size=30GB \
+                --boot-disk-size=40GB \
                 --tags=datahub-server,http-server,https-server \
                 --metadata=startup-script='#!/bin/bash
+                exec > >(tee /var/log/datahub-startup.log) 2>&1
+                echo "=== Starting DataHub VM Setup ==="
                 apt-get update
-                apt-get install -y docker.io docker-compose python3-pip
-                pip3 install acryl-datahub==1.7.0
+                apt-get install -y docker.io python3-pip curl
+                systemctl enable --now docker
+
+                # Create 4GB swap to prevent JVM/Elasticsearch OOM on 8GB VM
+                if [ ! -f /swapfile ]; then
+                  fallocate -l 4G /swapfile
+                  chmod 600 /swapfile
+                  mkswap /swapfile
+                  swapon /swapfile
+                  echo "/swapfile none swap sw 0 0" >> /etc/fstab
+                fi
+
+                pip3 install --no-cache-dir acryl-datahub==1.7.0
+                export HOME=/root
                 export PYTHONIOENCODING=utf-8
                 datahub docker quickstart
+                echo "=== DataHub Quickstart Launched ==="
                 '; then
-                echo "🎉 Successfully created DataHub VM in zone $ZONE!"
+                echo "Successfully created DataHub VM in zone $ZONE!"
                 CREATED=1
                 break
               else
-                echo "Zone $ZONE unavailable, trying next region/zone..."
+                echo "Zone $ZONE unavailable, trying next..."
               fi
             done
 
@@ -116,12 +120,12 @@ jobs:
           if [ -n "$ZONE" ]; then
             gcloud compute instances start ${{ env.VM_NAME }} --zone="$ZONE" --quiet
           else
-            echo "VM '${{ env.VM_NAME }}' not found. Please run with action 'provision' first."
+            echo "VM not found. Run with action 'provision' first."
             exit 1
           fi
 
       # ----------------------------------------------------------- #
-      # 3. Stop VM if action == 'stop' (cost saving)
+      # 3. Stop VM if action == 'stop'
       # ----------------------------------------------------------- #
       - name: Stop DataHub VM
         if: ${{ github.event.inputs.action == 'stop' }}
@@ -129,7 +133,7 @@ jobs:
           ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
           if [ -n "$ZONE" ]; then
             gcloud compute instances stop ${{ env.VM_NAME }} --zone="$ZONE" --quiet
-            echo "DataHub VM stopped successfully to save credits."
+            echo "DataHub VM stopped."
           fi
 
       # ----------------------------------------------------------- #
@@ -148,9 +152,10 @@ jobs:
           echo "DataHub GMS API: http://${IP}:8080"
           echo "=========================================================="
           echo "datahub_ip=$IP" >> $GITHUB_OUTPUT
+          echo "vm_zone=$ZONE" >> $GITHUB_OUTPUT
 
       # ----------------------------------------------------------- #
-      # 5. Run Ingestion Pipeline if action == 'run-ingestion' or 'provision'
+      # 5. Wait for DataHub GMS Readiness & Run Ingestion
       # ----------------------------------------------------------- #
       - name: Run Pipeline & Ingest into Cloud DataHub
         if: ${{ github.event.inputs.action == 'run-ingestion' || github.event.inputs.action == 'provision' }}
@@ -160,19 +165,27 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-          echo "Waiting for DataHub GMS at $DATAHUB_GMS_URL to become ready..."
+          echo "Polling DataHub GMS at $DATAHUB_GMS_URL/config for readiness..."
           READY=0
-          for i in {1..30}; do
-            if curl -s --max-time 3 "$DATAHUB_GMS_URL/health" 2>/dev/null | grep -qi "ok"; then
-              echo "DataHub GMS is healthy and ready!"
+          for i in {1..36}; do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$DATAHUB_GMS_URL/config" || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "DataHub GMS responded with HTTP 200 OK! Ready for ingestion."
               READY=1
               break
             fi
-            echo "DataHub GMS initializing on VM... ($i/30)"
+            echo "Waiting for DataHub Java GMS & Docker containers to initialize (attempt $i/36, status: $HTTP_CODE)..."
             sleep 10
           done
 
-          echo "Step 1: Generating synthetic raw data..."
+          if [ $READY -ne 1 ]; then
+            echo "ERROR: DataHub GMS did not become ready in time."
+            echo "Fetching VM serial port log for diagnostics..."
+            gcloud compute instances get-serial-port-output ${{ env.VM_NAME }} --zone="${{ steps.vm-ip.outputs.vm_zone }}" | tail -n 40
+            exit 1
+          fi
+
+          echo "Step 1: Generating synthetic raw seed data..."
           python pipeline/generate_raw_data.py
 
           echo "Step 2: Running dbt seed & build..."
@@ -189,4 +202,4 @@ jobs:
 
           echo "Step 4: Ingesting into Cloud DataHub at $DATAHUB_GMS_URL..."
           python -m ingestion
-          echo "DataHub pipeline ingestion completed successfully!"
+          echo "🎉 DataHub pipeline ingestion completed successfully!"
