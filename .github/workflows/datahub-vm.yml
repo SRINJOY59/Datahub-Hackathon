@@ -21,7 +21,6 @@ permissions:
 env:
   GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID || 'project-1e232997-e446-4263-977' }}
   GCP_REGION: us-central1
-  ZONE: us-central1-a
   VM_NAME: datahub-vm
 
 jobs:
@@ -43,7 +42,7 @@ jobs:
         uses: google-github-actions/setup-gcloud@v2
 
       # ----------------------------------------------------------- #
-      # 1. Provision VM if action == 'provision'
+      # 1. Provision VM with automatic multi-zone fallback
       # ----------------------------------------------------------- #
       - name: Provision DataHub Compute Engine VM
         if: ${{ github.event.inputs.action == 'provision' }}
@@ -56,26 +55,45 @@ jobs:
               --description="Allow DataHub GMS and Web UI"
           fi
 
-          echo "Checking if DataHub VM already exists..."
-          if gcloud compute instances describe ${{ env.VM_NAME }} --zone=${{ env.ZONE }} --quiet 2>/dev/null; then
-            echo "VM '${{ env.VM_NAME }}' already exists. Starting it..."
-            gcloud compute instances start ${{ env.VM_NAME }} --zone=${{ env.ZONE }} --quiet
+          # Check if VM already exists across any zone in the region
+          EXISTING_ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' 2>/dev/null | head -n 1)
+
+          if [ -n "$EXISTING_ZONE" ]; then
+            echo "VM '${{ env.VM_NAME }}' already exists in zone '$EXISTING_ZONE'. Starting it..."
+            gcloud compute instances start ${{ env.VM_NAME }} --zone="$EXISTING_ZONE" --quiet
           else
-            echo "Creating new DataHub Compute Engine VM..."
-            gcloud compute instances create ${{ env.VM_NAME }} \
-              --zone=${{ env.ZONE }} \
-              --machine-type=e2-standard-4 \
-              --image-family=ubuntu-2204-lts \
-              --image-project=ubuntu-os-cloud \
-              --boot-disk-size=50GB \
-              --tags=datahub-server,http-server,https-server \
-              --metadata=startup-script='#!/bin/bash
-              apt-get update
-              apt-get install -y docker.io docker-compose python3-pip
-              pip3 install acryl-datahub==1.7.0
-              export PYTHONIOENCODING=utf-8
-              datahub docker quickstart
-              '
+            echo "Creating new DataHub VM on Free Tier (e2-standard-2)..."
+            ZONES=("us-central1-b" "us-central1-c" "us-central1-f" "us-central1-a")
+            CREATED=0
+
+            for ZONE in "${ZONES[@]}"; do
+              echo "Attempting to create VM in zone $ZONE..."
+              if gcloud compute instances create ${{ env.VM_NAME }} \
+                --zone="$ZONE" \
+                --machine-type=e2-standard-2 \
+                --image-family=ubuntu-2204-lts \
+                --image-project=ubuntu-os-cloud \
+                --boot-disk-size=30GB \
+                --tags=datahub-server,http-server,https-server \
+                --metadata=startup-script='#!/bin/bash
+                apt-get update
+                apt-get install -y docker.io docker-compose python3-pip
+                pip3 install acryl-datahub==1.7.0
+                export PYTHONIOENCODING=utf-8
+                datahub docker quickstart
+                '; then
+                echo "Successfully created DataHub VM in zone $ZONE!"
+                CREATED=1
+                break
+              else
+                echo "Zone $ZONE busy or unavailable, trying next zone..."
+              fi
+            done
+
+            if [ $CREATED -ne 1 ]; then
+              echo "ERROR: Failed to create VM across all candidate zones."
+              exit 1
+            fi
           fi
 
       # ----------------------------------------------------------- #
@@ -84,7 +102,13 @@ jobs:
       - name: Start DataHub VM
         if: ${{ github.event.inputs.action == 'start' }}
         run: |
-          gcloud compute instances start ${{ env.VM_NAME }} --zone=${{ env.ZONE }} --quiet
+          ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
+          if [ -n "$ZONE" ]; then
+            gcloud compute instances start ${{ env.VM_NAME }} --zone="$ZONE" --quiet
+          else
+            echo "VM '${{ env.VM_NAME }}' not found. Please run with action 'provision' first."
+            exit 1
+          fi
 
       # ----------------------------------------------------------- #
       # 3. Stop VM if action == 'stop' (cost saving)
@@ -92,8 +116,11 @@ jobs:
       - name: Stop DataHub VM
         if: ${{ github.event.inputs.action == 'stop' }}
         run: |
-          gcloud compute instances stop ${{ env.VM_NAME }} --zone=${{ env.ZONE }} --quiet
-          echo "DataHub VM stopped successfully to reduce idle costs."
+          ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
+          if [ -n "$ZONE" ]; then
+            gcloud compute instances stop ${{ env.VM_NAME }} --zone="$ZONE" --quiet
+            echo "DataHub VM stopped successfully to save credits."
+          fi
 
       # ----------------------------------------------------------- #
       # 4. Resolve & Print VM IP Address
@@ -102,14 +129,18 @@ jobs:
         if: ${{ github.event.inputs.action != 'stop' }}
         id: vm-ip
         run: |
-          IP=$(gcloud compute instances describe ${{ env.VM_NAME }} --zone=${{ env.ZONE }} --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
+          ZONE=$(gcloud compute instances list --filter="name=${{ env.VM_NAME }}" --format='value(zone)' | head -n 1)
+          IP=$(gcloud compute instances describe ${{ env.VM_NAME }} --zone="$ZONE" --format='value(networkInterfaces[0].accessConfigs[0].natIP)')
+          echo "VM Zone: $ZONE"
           echo "VM External IP: $IP"
+          echo "=========================================================="
           echo "DataHub Web UI : http://${IP}:9002"
           echo "DataHub GMS API: http://${IP}:8080"
+          echo "=========================================================="
           echo "datahub_ip=$IP" >> $GITHUB_OUTPUT
 
       # ----------------------------------------------------------- #
-      # 5. Run Ingestion Pipeline if action == 'run-ingestion'
+      # 5. Run Ingestion Pipeline if action == 'run-ingestion' or 'provision'
       # ----------------------------------------------------------- #
       - name: Run Pipeline & Ingest into Cloud DataHub
         if: ${{ github.event.inputs.action == 'run-ingestion' || github.event.inputs.action == 'provision' }}
@@ -119,13 +150,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-          echo "Waiting 60 seconds for DataHub services to become fully ready..."
+          echo "Waiting 60 seconds for DataHub containers to initialize on the VM..."
           sleep 60
 
-          echo "Step 1: Generating raw seed data..."
+          echo "Step 1: Generating synthetic raw data..."
           python pipeline/generate_raw_data.py
 
-          echo "Step 2: Running dbt build..."
+          echo "Step 2: Running dbt seed & build..."
           cd pipeline/dbt
           dbt seed --profiles-dir .
           dbt run --profiles-dir .
@@ -133,10 +164,10 @@ jobs:
           dbt build --profiles-dir .
           cd ../..
 
-          echo "Step 3: Training Champion Model..."
+          echo "Step 3: Training champion model in MLflow..."
           python -m ml.train
           python -m ml.score
 
-          echo "Step 4: Ingesting into DataHub GMS at $DATAHUB_GMS_URL..."
+          echo "Step 4: Ingesting into Cloud DataHub at $DATAHUB_GMS_URL..."
           python -m ingestion
-          echo "DataHub ingestion completed successfully!"
+          echo "DataHub pipeline ingestion completed successfully!"
