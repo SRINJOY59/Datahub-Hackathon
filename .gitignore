@@ -40,3 +40,4 @@ supabase/
 
 test_clone_dir/
 .sentinel_cache/
+PROJECT_STORY.md
