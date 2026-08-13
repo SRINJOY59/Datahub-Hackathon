@@ -92,9 +92,45 @@ def run_dbt(args: list[str]) -> bool:
         return subprocess.run(cmd, cwd=str(DBT_DIR), env=env).returncode == 0
 
 
+def _ensure_dbt_catalog() -> None:
+    """Make sure target/catalog.json exists, without losing the test results.
+
+    `dbt docs generate` is the only command that writes the catalog, but it
+    also overwrites run_results.json with its own all-success results — which
+    would erase the very assertion failures the detectors key on and emit a
+    green graph for a broken pipeline. So: only generate when the catalog is
+    actually missing, and put run_results.json back afterwards.
+    """
+    target = DBT_DIR / "target"
+    catalog = target / "catalog.json"
+    if catalog.exists():
+        return
+
+    print("[reingest] no dbt catalog in this container, generating one...")
+    run_results = target / "run_results.json"
+    saved = run_results.read_bytes() if run_results.exists() else None
+    try:
+        run_dbt(["docs", "generate"])
+    except Exception as exc:
+        msg = str(exc).encode("ascii", "replace").decode("ascii")
+        print(f"[reingest] dbt docs generate failed: {msg}")
+    finally:
+        if saved is not None:
+            run_results.write_bytes(saved)  # restore the real test outcomes
+
+
 def reingest() -> None:
-    """Refresh DataHub so assertion results (and the incident) are visible."""
+    """Refresh DataHub so assertion results (and the incident) are visible.
+
+    The dbt recipe reads target/catalog.json, which only `dbt docs generate`
+    writes -- `run` and `test` do not. target/ is gitignored, so a fresh
+    container has no catalog and the recipe dies on FileNotFoundError, taking
+    the assertion results with it. That failure is invisible locally, where a
+    catalog is always lying around from earlier runs.
+    """
     sys.path.insert(0, str(REPO_ROOT))
+    _ensure_dbt_catalog()
+
     try:
         from ingestion.runner import IngestionRunner
         IngestionRunner().run()
