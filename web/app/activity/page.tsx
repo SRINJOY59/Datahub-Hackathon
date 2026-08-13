@@ -9,7 +9,7 @@ import {
   type ActionsConfig, type Job,
 } from "@/lib/actions";
 
-const POLL_MS = 6_000;
+const POLL_MS = 15_000;
 
 const STATUS_TONE: Record<string, string> = {
   applied: "text-good bg-good-soft",
@@ -40,6 +40,7 @@ export default function ActivityPage() {
   useEffect(() => {
     let cancelled = false;
     const load = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       Promise.all([fetchJournal(60), fetchWebhookActivity(), fetchJobs()])
         .then(([j, w, jb]) => {
           if (cancelled) return;

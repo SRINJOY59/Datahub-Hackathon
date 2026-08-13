@@ -33,6 +33,9 @@ export default function OverviewPage() {
   useEffect(() => {
     let cancelled = false;
     const load = () => {
+      // Don't poll a backgrounded tab — drills are CPU-bound and every idle
+      // poll queues behind them on the same Cloud Run instance.
+      if (typeof document !== "undefined" && document.hidden) return;
       Promise.all([fetchStats(), fetchIncidents({ limit: 7 }), fetchTrends(14), fetchDigest()])
         .then(([s, inc, t, d]) => {
           if (cancelled) return;

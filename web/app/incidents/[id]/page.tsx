@@ -23,6 +23,7 @@ export default function IncidentDetailPage() {
   useEffect(() => {
     let cancelled = false;
     const load = () => {
+      if (typeof document !== "undefined" && document.hidden) return;
       fetchIncident(id)
         .then((data) => {
           if (cancelled) return;

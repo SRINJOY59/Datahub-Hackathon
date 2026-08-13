@@ -69,6 +69,7 @@ export default function ApiHealthPage() {
 
 
   const loadData = () => {
+    if (typeof document !== "undefined" && document.hidden) return;
     Promise.all([
       fetchApiHealthStats(),
       fetchDependencies(),

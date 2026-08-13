@@ -6,6 +6,8 @@ what gives the agent real understanding instead of guesses.
 """
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timezone
 
 from datahub.ingestion.graph.client import DataHubGraph, DataHubGraphConfig
@@ -55,9 +57,45 @@ def _entity_type_from_urn(urn: str) -> str:
     return "dataset"
 
 
+"""Lineage breaker — a degraded GMS must not stall the whole loop.
+
+DataHub's shallow /health can pass while `searchAcrossLineage` (which goes to
+Elasticsearch) hangs. Without this, every incident the agent handles pays the
+full client timeout and then dies on the exception, so a slow graph looks
+exactly like a broken agent. Instead: fail fast, degrade to empty lineage, and
+stop asking for a cooldown once the graph has proved unwell.
+"""
+_LINEAGE_TIMEOUT_SEC = float(os.environ.get("DATAHUB_LINEAGE_TIMEOUT_SEC", "8"))
+_BREAKER_THRESHOLD = 3      # consecutive failures before we stop asking
+_BREAKER_COOLDOWN_SEC = 120
+
+_lineage_failures = 0
+_lineage_breaker_until = 0.0
+
+
+def _lineage_breaker_open() -> bool:
+    return time.monotonic() < _lineage_breaker_until
+
+
+def _note_lineage_failure() -> None:
+    global _lineage_failures, _lineage_breaker_until
+    _lineage_failures += 1
+    if _lineage_failures >= _BREAKER_THRESHOLD:
+        _lineage_breaker_until = time.monotonic() + _BREAKER_COOLDOWN_SEC
+        _lineage_failures = 0
+        print(f"[context] DataHub lineage unresponsive — skipping lineage "
+              f"for {_BREAKER_COOLDOWN_SEC}s; RCA continues without graph context")
+
+
+def _note_lineage_success() -> None:
+    global _lineage_failures
+    _lineage_failures = 0
+
+
 class DataHubContextTool:
     def __init__(self, gms_server: str = "http://localhost:8080") -> None:
-        self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
+        self.graph = DataHubGraph(DataHubGraphConfig(
+            server=gms_server, timeout_sec=_LINEAGE_TIMEOUT_SEC))
 
     # ------------------------------------------------------------------ #
     # detection
@@ -127,9 +165,25 @@ class DataHubContextTool:
     # context
     # ------------------------------------------------------------------ #
     def _lineage(self, urn: str, direction: str) -> list[LineageNode]:
-        """Lineage via the DataHub MCP Server when enabled, else the SDK."""
-        nodes = self._lineage_mcp(urn, direction)
-        return nodes if nodes is not None else self._lineage_sdk(urn, direction)
+        """Lineage via the DataHub MCP Server when enabled, else the SDK.
+
+        Lineage is enriching context, not a precondition for reasoning: when the
+        graph cannot answer, the agent is better off diagnosing from assertions
+        and schema than failing the incident outright.
+        """
+        if _lineage_breaker_open():
+            return []
+        try:
+            nodes = self._lineage_mcp(urn, direction)
+            if nodes is None:
+                nodes = self._lineage_sdk(urn, direction)
+        except Exception as exc:
+            _note_lineage_failure()
+            print(f"[context] lineage lookup failed for {_short_name(urn)} "
+                  f"({direction}): {type(exc).__name__}")
+            return []
+        _note_lineage_success()
+        return nodes
 
     def _lineage_mcp(self, urn: str, direction: str) -> list[LineageNode] | None:
         from agent.tools.mcp.client import shared_mcp
