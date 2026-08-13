@@ -69,9 +69,9 @@ export default function ActivityPage() {
   }
 
   return (
-    <div className="px-8 py-7 space-y-8">
+    <div className="px-4 py-5 space-y-6 sm:px-6 md:px-8 md:py-7 md:space-y-8">
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Activity</h1>
+        <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Activity</h1>
         <p className="mt-1 text-sm text-muted">
           Every action the agent has taken, the webhooks that triggered it, and
           the controls to drive it manually.

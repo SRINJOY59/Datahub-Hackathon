@@ -62,7 +62,7 @@ export default function OverviewPage() {
   const sparkCost = trends.map((d) => d.exposureUsd);
 
   return (
-    <div className="px-8 py-7 space-y-7">
+    <div className="px-4 py-5 space-y-5 sm:px-6 md:px-8 md:py-7 md:space-y-7">
       <PageHeader
         title="Operations Overview"
         subtitle="Live state of the remediation loop — detect, diagnose, act, validate."
@@ -81,7 +81,7 @@ export default function OverviewPage() {
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         {!loaded ? (
           <>
             <SkeletonTile /><SkeletonTile /><SkeletonTile /><SkeletonTile />
@@ -118,7 +118,7 @@ export default function OverviewPage() {
         )}
       </div>
 
-      <div className="grid grid-cols-1 gap-5 xl:grid-cols-5">
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5 sm:gap-5">
         <section className="card card-accent p-6 xl:col-span-3">
           <div className="flex items-baseline justify-between">
             <h2 className="text-sm font-medium">Incidents by change type</h2>
@@ -226,7 +226,7 @@ export default function OverviewPage() {
                         ` · closed in ${Math.round(inc.minutesToClose)}m`}
                     </p>
                   </div>
-                  <div className="flex shrink-0 items-center gap-2">
+                  <div className="hidden shrink-0 items-center gap-2 sm:flex">
                     <TierBadge tier={inc.tier} />
                     <StatusBadge status={inc.status} />
                     <span className="w-16 text-right text-xs tabular-nums text-muted">

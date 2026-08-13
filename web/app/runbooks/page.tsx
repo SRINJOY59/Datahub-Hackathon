@@ -24,7 +24,7 @@ export default function RunbooksPage() {
   const pending = runbooks.filter((r) => !r.registered);
 
   return (
-    <div className="px-8 py-7 max-w-5xl space-y-8">
+    <div className="px-4 py-5 max-w-5xl space-y-6 sm:px-6 md:px-8 md:py-7 md:space-y-8">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Runbooks</h1>
         <p className="mt-1 text-sm text-muted">

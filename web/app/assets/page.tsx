@@ -61,10 +61,10 @@ export default function AssetsPage() {
   }
 
   return (
-    <div className="px-8 py-7 space-y-6">
-      <div className="flex items-start justify-between">
+    <div className="px-4 py-5 space-y-5 sm:px-6 md:px-8 md:py-7 md:space-y-6">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Asset health</h1>
+          <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">Asset health</h1>
           <p className="mt-1 text-sm text-muted">
             Live trust score per asset, worst first. Computed from failing
             assertions, open incidents, volume and freshness drift, and incident
@@ -115,7 +115,7 @@ export default function AssetsPage() {
           No dbt datasets found in DataHub.
         </p>
       ) : (
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-3">
           {badges.map((b) => (
             <div key={b.assetUrn} className="card p-5">
               <div className="flex items-start justify-between">

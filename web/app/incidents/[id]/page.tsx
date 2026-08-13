@@ -41,7 +41,7 @@ export default function IncidentDetailPage() {
 
   if (notFound) {
     return (
-      <div className="px-8 py-16 max-w-4xl text-center">
+      <div className="px-4 py-12 max-w-4xl text-center sm:px-6 md:px-8 md:py-16">
         <p className="text-muted">No incident found with id {id}.</p>
         <Link href="/incidents" className="mt-4 inline-block text-accent hover:underline">
           ← back to incidents
@@ -51,11 +51,11 @@ export default function IncidentDetailPage() {
   }
 
   if (!incident) {
-    return <div className="px-8 py-16 max-w-4xl text-center text-muted">Loading…</div>;
+    return <div className="px-4 py-12 max-w-4xl text-center sm:px-6 md:px-8 md:py-16 text-muted">Loading…</div>;
   }
 
   return (
-    <div className="px-8 py-7 max-w-4xl space-y-6">
+    <div className="px-4 py-5 max-w-4xl space-y-5 sm:px-6 md:px-8 md:py-7 md:space-y-6">
       <Link href="/incidents" className="text-xs text-muted hover:text-foreground">
         ← incidents
       </Link>
@@ -73,7 +73,7 @@ export default function IncidentDetailPage() {
         </p>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         <MiniStat label="Cost exposure" value={incident.costUsd != null ? `$${Math.round(incident.costUsd).toLocaleString()}` : "—"} />
         <MiniStat label="Downstream" value={String(incident.downstreamCount ?? 0)} />
         <MiniStat label="Detected" value={fmt(incident.detectedAt)} small />

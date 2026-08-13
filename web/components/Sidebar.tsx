@@ -19,7 +19,7 @@ const NAV: { href: string; label: string; icon: React.ReactNode; group: string }
   { group: "Explore", href: "/", label: "Product Home", icon: <IconHome /> },
 ];
 
-export default function Sidebar({ onOpenConnectModal }: { onOpenConnectModal?: () => void }) {
+export default function Sidebar({ onOpenConnectModal, onCloseMobile }: { onOpenConnectModal?: () => void; onCloseMobile?: () => void }) {
   const pathname = usePathname();
   const router = useRouter();
   const { user, username, email, signOut } = useAuth();
@@ -32,19 +32,32 @@ export default function Sidebar({ onOpenConnectModal }: { onOpenConnectModal?: (
 
   return (
     <aside className="sticky top-0 flex h-screen w-[228px] shrink-0 flex-col border-r border-border bg-surface/40">
-      <div className="flex items-center gap-2.5 px-5 py-4 border-b border-border/40">
-        <span className="relative flex h-2.5 w-2.5">
-          <span className="pulse-live absolute inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
-        </span>
-        <div>
-          <p className="text-sm font-bold leading-none tracking-tight text-foreground flex items-center gap-1.5">
-            <span>OmniSRE</span>
-            <span className="rounded bg-accent-soft px-1.5 py-0.2 text-[9px] font-mono text-accent border border-accent/30">AI</span>
-          </p>
-          <p className="mt-1 text-[10px] leading-none text-muted-dim">
-            multi-repo data & ml sre
-          </p>
+      <div className="flex items-center justify-between px-5 py-4 border-b border-border/40">
+        <div className="flex items-center gap-2.5">
+          <span className="relative flex h-2.5 w-2.5">
+            <span className="pulse-live absolute inline-flex h-2.5 w-2.5 rounded-full bg-accent" />
+          </span>
+          <div>
+            <p className="text-sm font-bold leading-none tracking-tight text-foreground flex items-center gap-1.5">
+              <span>OmniSRE</span>
+              <span className="rounded bg-accent-soft px-1.5 py-0.2 text-[9px] font-mono text-accent border border-accent/30">AI</span>
+            </p>
+            <p className="mt-1 text-[10px] leading-none text-muted-dim">
+              multi-repo data & ml sre
+            </p>
+          </div>
         </div>
+        {onCloseMobile && (
+          <button
+            onClick={onCloseMobile}
+            className="rounded p-1 text-muted hover:bg-surface-hover hover:text-foreground md:hidden"
+            aria-label="Close menu"
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        )}
       </div>
 
       {/* Active Repo Switcher */}
@@ -68,6 +81,7 @@ export default function Sidebar({ onOpenConnectModal }: { onOpenConnectModal?: (
                   <Link
                     key={item.href}
                     href={item.href}
+                    onClick={onCloseMobile}
                     className={`group relative flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm transition ${
                       active
                         ? "bg-accent-soft text-foreground"

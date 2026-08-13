@@ -316,7 +316,7 @@ export default function ApiHealthPage() {
   }, [dependencies, statusFilter, depQuery]);
 
   return (
-    <div className="px-8 py-7 space-y-7">
+    <div className="px-4 py-5 space-y-5 sm:px-6 md:px-8 md:py-7 md:space-y-7">
       <PageHeader
         title="Self-Maintaining APIs"
         subtitle="Automated API change intelligence, DataHub lineage blast-radius mapping, and autonomous migration PRs."
@@ -398,7 +398,7 @@ export default function ApiHealthPage() {
       )}
 
       {/* KPI Tiles */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         {loading ? (
           <>
             <SkeletonTile />
@@ -437,8 +437,8 @@ export default function ApiHealthPage() {
       </div>
 
       {/* Tabs */}
-      <div className="border-b border-border flex items-center justify-between">
-        <div className="flex gap-2">
+      <div className="border-b border-border flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex gap-2 overflow-x-auto scrollbar-thin pb-px">
           {[
             { key: "advisories", label: `Active Advisories (${advisories.length})` },
             { key: "dependencies", label: `Dependency Inventory (${dependencies.length})` },
@@ -448,7 +448,7 @@ export default function ApiHealthPage() {
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key as TabKey)}
-              className={`pb-3 px-3 text-xs font-medium border-b-2 transition ${
+              className={`whitespace-nowrap pb-3 px-3 text-xs font-medium border-b-2 transition ${
                 activeTab === tab.key
                   ? "border-accent text-accent"
                   : "border-transparent text-muted hover:text-foreground"
@@ -573,13 +573,13 @@ export default function ApiHealthPage() {
       {/* TAB 2: DEPENDENCY INVENTORY */}
       {activeTab === "dependencies" && (
         <div className="space-y-4">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
             <input
               type="text"
               value={depQuery}
               onChange={(e) => setDepQuery(e.target.value)}
               placeholder="Search package or version..."
-              className="w-72 rounded-lg border border-border bg-surface px-3 py-1.5 text-xs outline-none focus:border-accent"
+              className="w-full rounded-lg border border-border bg-surface px-3 py-1.5 text-xs outline-none focus:border-accent sm:w-72"
             />
 
             <div className="flex gap-1.5">
@@ -599,8 +599,8 @@ export default function ApiHealthPage() {
             </div>
           </div>
 
-          <div className="card overflow-hidden">
-            <table className="w-full text-xs">
+          <div className="card overflow-x-auto">
+            <table className="w-full min-w-[640px] text-xs">
               <thead>
                 <tr className="border-b border-border text-left text-muted-dim">
                   <th className="px-4 py-3 font-medium">Package</th>
@@ -792,7 +792,7 @@ export default function ApiHealthPage() {
             ) : (
               <div className="space-y-5">
                 {/* Visual Chain */}
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4">
                   {/* Step 1: External API */}
                   <div className="rounded-lg border border-bad/30 bg-bad-soft/20 p-3 space-y-1.5">
                     <p className="text-[10px] font-semibold uppercase tracking-wider text-bad">1. External Vendor API</p>

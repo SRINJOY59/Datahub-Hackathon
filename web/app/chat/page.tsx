@@ -99,7 +99,7 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="mx-auto flex h-[calc(100vh-57px)] max-w-7xl">
+    <div className="mx-auto flex h-[calc(100vh-57px)] max-w-7xl md:h-[calc(100vh)]">
       <aside className="hidden w-64 shrink-0 border-r border-border p-4 md:block">
         <button
           onClick={newSession}

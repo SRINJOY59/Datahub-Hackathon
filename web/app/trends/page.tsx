@@ -35,7 +35,7 @@ export default function TrendsPage() {
     .map((d) => ({ label: d.day, value: d.mttrMinutes as number }));
 
   return (
-    <div className="px-8 py-7 space-y-7">
+    <div className="px-4 py-5 space-y-5 sm:px-6 md:px-8 md:py-7 md:space-y-7">
       <PageHeader
         title="Trends"
         subtitle="How the loop performs over time — incident volume, exposure, and time to close."
@@ -66,7 +66,7 @@ export default function TrendsPage() {
       )}
 
       {digest && (
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 md:grid-cols-4">
           <StatTile label="Incidents handled" value={digest.incidents} />
           <StatTile label="Actions applied" value={digest.actionsApplied} tone="good" />
           <StatTile label="Engineer-hours saved" value={digest.hoursSaved} suffix=" h" tone="good" />

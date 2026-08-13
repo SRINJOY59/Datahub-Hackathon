@@ -313,7 +313,7 @@ export default function PipelinePage() {
   const totalRecords = runs.reduce((s, r) => s + r.recordsProcessed, 0);
 
   return (
-    <div className="px-8 py-7 space-y-7">
+    <div className="px-4 py-5 space-y-5 sm:px-6 md:px-8 md:py-7 md:space-y-7">
       <PageHeader
         title="Pipeline"
         subtitle="Traces, logs, and metrics across every pipeline run — correlated with the incident loop."
@@ -339,7 +339,7 @@ export default function PipelinePage() {
       />
 
       {/* ── Metric tiles ── */}
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 lg:grid-cols-4">
         <MetricTile label="Pipeline runs" value={runs.length} hint={`${runningCount} running`} />
         <MetricTile label="Succeeded" value={successCount} tone="good" hint={`${((successCount / (runs.length || 1)) * 100).toFixed(0)}% success rate`} />
         <MetricTile label="Failed" value={failedCount} tone={failedCount > 0 ? "bad" : "good"} hint="linked to incidents" />
@@ -347,7 +347,7 @@ export default function PipelinePage() {
       </div>
 
       {/* ── Metrics sparklines ── */}
-      <div className="grid grid-cols-1 gap-5 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 sm:gap-5 lg:grid-cols-3">
         <section className="card card-accent p-5">
           <h2 className="text-sm font-medium">Records / hour</h2>
           <p className="mt-1 text-xs text-muted-dim">Throughput across all pipelines</p>
@@ -459,12 +459,12 @@ export default function PipelinePage() {
 
       {/* ── Live Logs ── */}
       <section className="card p-6">
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <h2 className="text-sm font-medium">Pipeline logs</h2>
             <p className="mt-1 text-xs text-muted-dim">Aggregated log stream across all pipeline components</p>
           </div>
-          <div className="flex gap-1">
+          <div className="flex flex-wrap gap-1">
             {LEVEL_FILTERS.map((lv) => (
               <button
                 key={lv}
