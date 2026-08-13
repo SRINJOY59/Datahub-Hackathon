@@ -12,6 +12,10 @@ When upstream data breaks, models drift, or breaking API migrations occur, OmniS
 
 <div align="center">
 
+<p align="center">
+  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
+</p>
+
 ### 🎬 Live Autonomous Self-Healing Demo in Action
 
 ![OmniSRE Live Incident Remediation Demo](assets/omnisre_demo.gif)
@@ -21,15 +25,9 @@ When upstream data breaks, models drift, or breaking API migrations occur, OmniS
   Your browser does not support HTML5 video. <a href="assets/OmniSRE_Demo_Final.mp4">Download/Play the full video demo (assets/OmniSRE_Demo_Final.mp4)</a>.
 </video>
 
-<p align="center">
-  <sub>🎥 <b>Full 1080p Video Demo:</b> <a href="assets/OmniSRE_Demo_Final.mp4">assets/OmniSRE_Demo_Final.mp4</a> | 🚀 <b>Live Interactive Cloud App:</b> <a href="https://sentinel-web-55utjgkpwq-uc.a.run.app">sentinel-web-55utjgkpwq-uc.a.run.app</a></sub>
-</p>
 
 </div>
 
-<p align="center">
-  <img src="assets/omnisre_hero.png" alt="OmniSRE Autonomous SRE Control Plane" width="100%" />
-</p>
 
 ---
 
