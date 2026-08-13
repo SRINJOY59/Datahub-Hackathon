@@ -4,13 +4,19 @@ on:
   push:
     branches: [main]
     paths:
+      # Dockerfile.api does `COPY . .`, so every backend package below ships in
+      # the image. Anything omitted here can be committed and pushed and will
+      # silently never deploy -- `ingestion/**` was missing, which is how the
+      # GMS-URL fix sat on main without ever reaching Cloud Run.
       - "agent/**"
       - "api/**"
+      - "ingestion/**"
       - "pipeline/**"
       - "ml/**"
       - "memory/**"
       - "governance/**"
       - "scenarios/**"
+      - "evaluation/**"
       - "scripts/**"
       - "config/**"
       - "tests/**"
