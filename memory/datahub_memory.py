@@ -29,7 +29,10 @@ _MARKER = "_sentinel_incident"
 
 
 class DataHubMemory:
-    def __init__(self, gms_server: str = "http://localhost:8080") -> None:
+    def __init__(self, gms_server: str | None = None) -> None:
+        from agent.gms import default_gms_server
+
+        gms_server = gms_server or default_gms_server()
         self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
 
     def record(self, pm: PostMortem) -> None:

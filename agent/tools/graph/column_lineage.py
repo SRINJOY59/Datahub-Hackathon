@@ -44,7 +44,10 @@ def _parse_schema_field(sf_urn: str) -> ColumnRef | None:
 
 
 class ColumnLineageTool:
-    def __init__(self, gms_server: str = "http://localhost:8080") -> None:
+    def __init__(self, gms_server: str | None = None) -> None:
+        from agent.gms import default_gms_server
+
+        gms_server = gms_server or default_gms_server()
         self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
 
     def _dbt_urn(self, table: str, name_prefix: str) -> str:

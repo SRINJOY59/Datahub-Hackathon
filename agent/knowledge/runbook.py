@@ -37,8 +37,11 @@ def skill_urn(change_type: str) -> str:
 
 
 class RunbookSynthesizer:
-    def __init__(self, gms_server: str = "http://localhost:8080",
+    def __init__(self, gms_server: str | None = None,
                  llm: Optional[LLMClient] = None) -> None:
+        from agent.gms import default_gms_server
+
+        gms_server = gms_server or default_gms_server()
         self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
         self.llm = llm or LLMClient()
 

@@ -80,7 +80,10 @@ def score_from_signals(signals: HealthSignals) -> float:
 
 
 class TrustScorer:
-    def __init__(self, gms_server: str = "http://localhost:8080") -> None:
+    def __init__(self, gms_server: str | None = None) -> None:
+        from agent.gms import default_gms_server
+
+        gms_server = gms_server or default_gms_server()
         self.gms_server = gms_server
         self.graph = DataHubGraph(DataHubGraphConfig(server=gms_server))
         self.baselines = BaselineStore()

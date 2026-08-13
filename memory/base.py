@@ -19,10 +19,12 @@ from agent.contracts import MemoryStore
 
 
 def get_memory(kind: str | None = None,
-               gms_server: str = "http://localhost:8080") -> MemoryStore:
+               gms_server: str | None = None) -> MemoryStore:
+    from agent.gms import default_gms_server
+
     kind = kind or os.getenv("SENTINEL_MEMORY", "datahub")
     if kind == "datahub":
         from memory.datahub_memory import DataHubMemory
 
-        return DataHubMemory(gms_server)
+        return DataHubMemory(gms_server or default_gms_server())
     raise ValueError(f"unknown memory backend: {kind}")
